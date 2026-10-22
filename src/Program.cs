@@ -9,7 +9,8 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("AudioFollow - Voice and playback routing")]
 [assembly: System.Reflection.AssemblyDescription("Automatic playback and microphone routing for Windows 11")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("1.3.0-preview.1")]
 [assembly: System.Runtime.InteropServices.ComVisible(false)]
 
 namespace AudioFollow
@@ -25,13 +26,15 @@ namespace AudioFollow
                 switch (command)
                 {
                     case "--help":
-                        Console.WriteLine("AudioFollow.exe [--background]\r\nAudioSwitchCtl.exe --status|--headset|--monitor|--toggle|--auto|--pause|--refresh|--show|--exit\r\nAudioSwitchCtl.exe --diagnose|--probe [seconds]|--verify-routing|--install-startup|--uninstall-startup");
+                        Console.WriteLine("AudioFollow.exe [--background]\r\nAudioSwitchCtl.exe --status|--headset|--monitor|--toggle|--auto|--pause|--refresh|--show|--exit\r\nAudioSwitchCtl.exe --diagnose|--probe [seconds]|--verify-routing|--install-startup|--uninstall-startup\r\nAudioSwitchCtl.exe --list-triggers Hid|UsbAudio|Bluetooth\r\nAudioSwitchCtl.exe --check-trigger <settings.json> (read-only)");
                         return 0;
                     case "--install-startup": Startup.Set(true); Console.WriteLine(Startup.Command); return 0;
                     case "--uninstall-startup": Startup.Set(false); Console.WriteLine("Startup disabled."); return 0;
                     case "--diagnose": return Diagnose();
                     case "--probe": return Probe(args);
                     case "--verify-routing": return VerifyRouting();
+                    case "--list-triggers": return ListTriggers(args);
+                    case "--check-trigger": return CheckTrigger(args);
                     case "--status": case "--headset": case "--monitor": case "--toggle":
                     case "--auto": case "--pause": case "--refresh": case "--show": case "--exit":
                         string reply;
@@ -52,7 +55,7 @@ namespace AudioFollow
                     }
                     try
                     {
-                        AppFiles.Log("START version=1.2.0; process=" + Process.GetCurrentProcess().Id);
+                        AppFiles.Log("START version=1.3.0-preview.1; process=" + Process.GetCurrentProcess().Id);
                         Application.EnableVisualStyles();
                         Application.SetCompatibleTextRenderingDefault(false);
                         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -98,24 +101,51 @@ namespace AudioFollow
                     }));
                     return 0;
                 }
-                using (var sensor = new HeadsetSensor())
-                {
-                    var clock = Stopwatch.StartNew();
-                    while (clock.ElapsedMilliseconds < 3500)
-                    {
-                        sensor.Poll(200);
-                        if (sensor.Current.State != LinkState.Unknown) break;
-                        Thread.Sleep(25);
-                    }
-                    Console.WriteLine(Json.Encode(new {
-                        Defaults = snapshot.Defaults, DefaultNames = snapshot.Defaults.Select(snapshot.NameOf).ToArray(),
-                        CaptureDefaults = capture.Defaults, CaptureDefaultNames = capture.Defaults.Select(capture.NameOf).ToArray(),
-                        CaptureEndpoints = capture.Endpoints,
-                        Endpoints = snapshot.Endpoints, Link = sensor.Current, Startup = Startup.Enabled,
-                        DataFolder = AppFiles.Folder
-                    }));
-                    return sensor.Current.State == LinkState.Unknown ? 2 : 0;
-                }
+                Settings selected = Settings.Load().Upgrade(snapshot, capture);
+                TriggerReading reading = System.Threading.Tasks.Task.Run(delegate {
+                    return TriggerInspection.Check(selected.Trigger, snapshot, capture, CancellationToken.None);
+                }).GetAwaiter().GetResult();
+                Console.WriteLine(Json.Encode(new {
+                    Defaults = snapshot.Defaults, DefaultNames = snapshot.Defaults.Select(snapshot.NameOf).ToArray(),
+                    CaptureDefaults = capture.Defaults, CaptureDefaultNames = capture.Defaults.Select(capture.NameOf).ToArray(),
+                    CaptureEndpoints = capture.Endpoints,
+                    Endpoints = snapshot.Endpoints, Trigger = selected.Trigger, Link = reading, Startup = Startup.Enabled,
+                    DataFolder = AppFiles.Folder
+                }));
+                return reading.State == LinkState.Unknown ? 2 : 0;
+            }
+        }
+
+        static int ListTriggers(string[] args)
+        {
+            TriggerKind kind;
+            if (args.Length < 2 || !Enum.TryParse<TriggerKind>(args[1], true, out kind))
+                throw new ArgumentException("Use --list-triggers Hid|UsbAudio|Bluetooth.");
+            using (var audio = new AudioCore(null))
+            using (var capture = new AudioCore(null, 1))
+            {
+                AudioSnapshot output = audio.Read(), input = capture.Read();
+                Console.WriteLine(Json.Encode(System.Threading.Tasks.Task.Run(delegate {
+                    return TriggerInspection.List(kind, output, input, CancellationToken.None);
+                }).GetAwaiter().GetResult()));
+            }
+            return 0;
+        }
+
+        static int CheckTrigger(string[] args)
+        {
+            if (args.Length != 2) throw new ArgumentException("Use --check-trigger <settings.json>. This only reads; it never applies settings or routes.");
+            Settings selected = Json.Decode<Settings>(File.ReadAllText(args[1]));
+            selected.Validate();
+            using (var audio = new AudioCore(null))
+            using (var capture = new AudioCore(null, 1))
+            {
+                AudioSnapshot output = audio.Read(), input = capture.Read();
+                TriggerReading reading = System.Threading.Tasks.Task.Run(delegate {
+                    return TriggerInspection.Check(selected.Trigger, output, input, CancellationToken.None);
+                }).GetAwaiter().GetResult();
+                Console.WriteLine(Json.Encode(reading));
+                return reading.State == LinkState.Unknown ? 2 : 0;
             }
         }
 
@@ -160,19 +190,22 @@ namespace AudioFollow
                 Endpoint headset = settings.Resolve(before, "headset"), monitor = settings.Resolve(before, "monitor");
                 Endpoint headsetMicrophone = settings.ResolveMicrophone(captureBefore, true);
                 Endpoint fallbackMicrophone = settings.ResolveMicrophone(captureBefore, false);
-                if (headset == null || monitor == null) throw new InvalidOperationException("Both target outputs must be active for the routing test.");
-                if (settings.SwitchMicrophone && (headsetMicrophone == null || fallbackMicrophone == null))
+                settings = settings.Upgrade(before, captureBefore);
+                if ((headset == null && !settings.Connected.Output.KeepCurrent) || (monitor == null && !settings.Disconnected.Output.KeepCurrent))
+                    throw new InvalidOperationException("Selected target outputs must be active for the routing test.");
+                if (settings.SwitchMicrophone && ((headsetMicrophone == null && !settings.Connected.Microphone.KeepCurrent) ||
+                    (fallbackMicrophone == null && !settings.Disconnected.Microphone.KeepCurrent)))
                     throw new InvalidOperationException("Both selected microphones must be active for the routing test.");
                 try
                 {
-                    foreach (Endpoint target in new[] { headset, monitor })
+                    foreach (Endpoint target in new[] { headset, monitor }.Where(e => e != null))
                     {
                         audio.SetAllRoles(target.Id);
                         AudioSnapshot after = audio.Read();
                         report.Add(new { Target = target.Name, VerifiedAllThreeRoles = after.Defaults.All(id => id == target.Id), Defaults = after.Defaults });
                     }
                     if (settings.SwitchMicrophone)
-                        foreach (Endpoint target in new[] { headsetMicrophone, fallbackMicrophone })
+                        foreach (Endpoint target in new[] { headsetMicrophone, fallbackMicrophone }.Where(e => e != null))
                         {
                             microphones.SetAllRoles(target.Id);
                             AudioSnapshot after = microphones.Read();

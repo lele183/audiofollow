@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 
 namespace AudioFollow
 {
@@ -95,14 +96,17 @@ namespace AudioFollow
     {
         HidDevice device;
         readonly LinkProtocol protocol = new LinkProtocol();
+        string selectedId;
+        public string DeviceId { get; private set; }
         long lastQuery, lastVerified, lastOpen;
         LinkReading current = new LinkReading { State = LinkState.Unknown, Evidence = "Not queried yet" };
         public Action<string> Trace;
         public LinkReading Current { get { return current; } }
         public System.Threading.WaitHandle ReadReady { get { return device == null ? null : device.ReadReady; } }
 
-        public HeadsetSensor()
+        public HeadsetSensor(string selectedId = null)
         {
+            this.selectedId = selectedId;
             protocol.OnReading = delegate(LinkReading reading) {
                 current = reading;
                 lastVerified = Stopwatch.GetTimestamp();
@@ -119,9 +123,12 @@ namespace AudioFollow
                 try
                 {
                     List<HidInfo> found = Hid.Enumerate();
+                    if (!string.IsNullOrEmpty(selectedId)) found = found.Where(d => DeviceIdentity.Same(d.Path, selectedId)).ToList();
                     if (found.Count == 0) { Set(LinkState.ReceiverMissing, "HID enumeration: receiver absent"); return; }
                     if (found.Count != 1) { Set(LinkState.Unknown, "More than one matching Razer receiver"); return; }
                     device = new HidDevice(found[0]);
+                    DeviceId = found[0].Path;
+                    selectedId = DeviceId;
                     protocol.Reset();
                     lastQuery = 0;
                     Set(LinkState.Unknown, "Receiver opened; waiting for verified link status");

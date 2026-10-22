@@ -17,7 +17,6 @@ function Wait-State([scriptblock]$Predicate) {
 }
 $before = Get-LiveStatus
 if ($before.Mode -ne 'Automatic') { throw 'Restore automatic mode before this test.' }
-if (-not $before.SwitchMicrophone) { throw 'Enable microphone following before this test.' }
 try {
     foreach ($target in @('monitor', 'headset')) {
         & $Control "--$target" | Out-Null
@@ -25,9 +24,10 @@ try {
         $state = Wait-State { param($s)
             $id = if ($target -eq 'monitor') { $s.MonitorEndpointId } else { $s.HeadsetEndpointId }
             $microphone = if ($target -eq 'monitor') { $s.FallbackMicrophoneId } else { $s.HeadsetMicrophoneId }
-            $s.Mode -eq $target -and $id -and $microphone -and -not $s.Error -and -not $s.MicrophoneError -and
-                $s.DefaultIds.Count -eq 3 -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0 -and
-                $s.CaptureDefaultIds.Count -eq 3 -and @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0
+            $s.Mode -eq $target -and -not $s.Error -and -not $s.MicrophoneError -and
+                ($s.OutputKeepCurrent -or ($id -and $s.DefaultIds.Count -eq 3 -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0)) -and
+                (-not $s.SwitchMicrophone -or $s.MicrophoneKeepCurrent -or ($microphone -and
+                    $s.CaptureDefaultIds.Count -eq 3 -and @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0))
         }
         $actual = & $Control --diagnose | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or (Compare-Object $actual.Defaults $state.DefaultIds) -or
@@ -41,13 +41,14 @@ try {
         $state = Wait-State { param($s) $s.WorkerIterations -gt $beforeRefresh -and $s.Mode -eq 'Automatic' -and $s.Link -in @('Connected','Disconnected') -and -not $s.Error -and -not $s.MicrophoneError }
     }
     if ($state.ProcessId -ne $before.ProcessId) { throw 'Process restarted during test.' }
-    Write-Output "PASS $ReconnectCount HID reconnects; process remained live with verified link responses"
+    Write-Output "PASS $ReconnectCount detector refreshes; process remained live with confirmed states"
     $state = Wait-State { param($s)
         $id = if ($s.Link -eq 'Connected') { $s.HeadsetEndpointId } else { $s.MonitorEndpointId }
         $microphone = if ($s.Link -eq 'Connected') { $s.HeadsetMicrophoneId } else { $s.FallbackMicrophoneId }
-        $s.Mode -eq 'Automatic' -and $id -and $microphone -and $s.CaptureDefaultIds.Count -eq 3 -and
-            @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0 -and
-            @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0
+        $s.Mode -eq 'Automatic' -and $s.StableLink -in @('Connected','Disconnected','ReceiverMissing') -and
+            ($s.OutputKeepCurrent -or ($id -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0)) -and
+            (-not $s.SwitchMicrophone -or $s.MicrophoneKeepCurrent -or ($microphone -and
+                @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0))
     }
     $actual = & $Control --diagnose | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or (Compare-Object $actual.Defaults $state.DefaultIds) -or

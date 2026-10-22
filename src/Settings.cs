@@ -20,6 +20,39 @@ namespace AudioFollow
         public bool SwitchMicrophone = true;
         public string HeadsetMicrophoneId = "";
         public string FallbackMicrophoneId = "";
+        public int SchemaVersion;
+        public TriggerSettings Trigger;
+        public RouteTargets Connected;
+        public RouteTargets Disconnected;
+
+        public Settings Copy() { return Json.Decode<Settings>(Json.Encode(this)); }
+
+        public Settings Upgrade(AudioSnapshot output, AudioSnapshot input)
+        {
+            Settings value = Copy();
+            if (value.Trigger == null) value.Trigger = new TriggerSettings { Kind = TriggerKind.Hid, DisplayName = "Barracuda X 2022 · 专用无线检测" };
+            if (value.Connected == null) value.Connected = new RouteTargets {
+                Output = LegacyTarget(output, HeadsetEndpointId, HeadsetName, 0),
+                Microphone = LegacyTarget(input, HeadsetMicrophoneId, HeadsetMicrophoneName, 1)
+            };
+            if (value.Disconnected == null) value.Disconnected = new RouteTargets {
+                Output = LegacyTarget(output, MonitorEndpointId, MonitorName, 0),
+                Microphone = LegacyTarget(input, FallbackMicrophoneId, FallbackMicrophoneName, 1)
+            };
+            if (string.IsNullOrEmpty(value.ReferenceEndpointId) && output != null)
+            {
+                Endpoint reference = ResolveDevice(output, "", ReferenceName, 0);
+                if (reference != null) value.ReferenceEndpointId = reference.Id;
+            }
+            value.SchemaVersion = 3;
+            return value;
+        }
+
+        static EndpointTarget LegacyTarget(AudioSnapshot snapshot, string id, string name, int flow)
+        {
+            Endpoint found = snapshot == null ? null : ResolveDevice(snapshot, id, name, flow);
+            return new EndpointTarget { EndpointId = found == null ? id : found.Id, DisplayName = found == null ? name : found.Name };
+        }
 
         public static Settings Load()
         {
@@ -45,10 +78,43 @@ namespace AudioFollow
             }
         }
 
-        public void Save() { AppFiles.WriteAtomic(AppFiles.SettingsFile, Json.Encode(this)); }
+        public void Save()
+        {
+            Validate(true);
+            PreserveLegacy(AppFiles.SettingsFile);
+            AppFiles.WriteAtomic(AppFiles.SettingsFile, Json.Encode(this));
+        }
+
+        public static void PreserveLegacy(string path)
+        {
+            if (!File.Exists(path) || File.Exists(path + ".pre-v1.3.bak")) return;
+            Settings old = Json.Decode<Settings>(File.ReadAllText(path, Encoding.UTF8));
+            if (old != null && old.Trigger == null) File.Copy(path, path + ".pre-v1.3.bak");
+        }
+
+        public void Validate(bool requireTargets = false)
+        {
+            if (Trigger == null || !Enum.IsDefined(typeof(TriggerKind), Trigger.Kind))
+                throw new InvalidDataException("请选择连接方式。");
+            if (Trigger.Kind != TriggerKind.Hid && string.IsNullOrEmpty(Trigger.DeviceId))
+                throw new InvalidDataException("请选择触发设备。");
+            if (Trigger.Kind == TriggerKind.UsbAudio && !DeviceIdentity.ValidContainer(Trigger.ContainerId))
+                throw new InvalidDataException("设备没有可用的固定容器标识，请重新选择。");
+            if (Trigger.Kind == TriggerKind.Bluetooth && !BluetoothIdentity.AudioProtocol(Trigger.ProtocolId))
+                throw new InvalidDataException("蓝牙传输标识无效，请重新选择设备。");
+            if (Connected == null || Disconnected == null || Connected.Output == null || Connected.Microphone == null ||
+                Disconnected.Output == null || Disconnected.Microphone == null)
+                throw new InvalidDataException("请为两组声音输出和麦克风选择设备或「保持当前」。");
+            if (requireTargets && new[] { Connected.Output, Connected.Microphone, Disconnected.Output, Disconnected.Microphone }
+                .Any(t => !t.KeepCurrent && string.IsNullOrEmpty(t.EndpointId)))
+                throw new InvalidDataException("有设备尚未选择，请指定设备或明确选择「保持当前」。");
+            SchemaVersion = 3;
+        }
 
         public Endpoint Resolve(AudioSnapshot snapshot, string kind)
         {
+            if (kind != "reference" && Connected != null && Disconnected != null)
+                return (kind == "headset" ? Connected : Disconnected).Output.Resolve(snapshot, 0);
             string id = kind == "headset" ? HeadsetEndpointId : kind == "monitor" ? MonitorEndpointId : ReferenceEndpointId;
             string name = kind == "headset" ? HeadsetName : kind == "monitor" ? MonitorName : ReferenceName;
             return ResolveDevice(snapshot, id, name, 0);
@@ -56,6 +122,7 @@ namespace AudioFollow
 
         public Endpoint ResolveMicrophone(AudioSnapshot snapshot, bool headset)
         {
+            if (Connected != null && Disconnected != null) return (headset ? Connected : Disconnected).Microphone.Resolve(snapshot, 1);
             return ResolveDevice(snapshot, headset ? HeadsetMicrophoneId : FallbackMicrophoneId,
                 headset ? HeadsetMicrophoneName : FallbackMicrophoneName, 1);
         }
@@ -66,6 +133,25 @@ namespace AudioFollow
             Endpoint[] matches = snapshot.Endpoints.Where(e => e.Active && e.Flow == flow && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToArray();
             return matches.Length == 1 ? matches[0] : null;
         }
+    }
+
+    public sealed class EndpointTarget
+    {
+        public bool KeepCurrent;
+        public string EndpointId = "", DisplayName = "";
+        public Endpoint Resolve(AudioSnapshot snapshot, int flow)
+        {
+            return KeepCurrent || snapshot == null ? null :
+                snapshot.Endpoints.FirstOrDefault(e => DeviceIdentity.Same(e.Id, EndpointId) && e.Active && e.Flow == flow);
+        }
+        public static EndpointTarget Keep() { return new EndpointTarget { KeepCurrent = true, DisplayName = "保持当前" }; }
+        public static EndpointTarget For(Endpoint endpoint) { return new EndpointTarget { EndpointId = endpoint.Id, DisplayName = endpoint.Name }; }
+    }
+
+    public sealed class RouteTargets
+    {
+        public EndpointTarget Output = EndpointTarget.Keep();
+        public EndpointTarget Microphone = EndpointTarget.Keep();
     }
 
     public static class Json

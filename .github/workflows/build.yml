@@ -1,7 +1,7 @@
 name: Windows build and tests
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/**']
   pull_request:
   workflow_dispatch:
 
@@ -16,6 +16,9 @@ jobs:
       - name: Build, test, and package
         shell: pwsh
         run: ./Package.ps1
+      - name: Render and check native UI
+        shell: pwsh
+        run: ./Preview.ps1
       - name: Upload Windows package
         uses: actions/upload-artifact@v7.0.2
         with:

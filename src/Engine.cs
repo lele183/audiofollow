@@ -25,11 +25,15 @@ namespace AudioFollow
     public sealed class SwitchStatus
     {
         public int ProcessId;
-        public string Version = "1.2.0";
+        public string Version = "1.3.0-preview.1";
         public string UpdatedUtc, Mode, Link, Evidence, RawFrame, Message, Error;
+        public TriggerSettings Trigger;
+        public string StableLink, ObservedUtc;
+        public int DetectorGeneration;
         public string HeadsetEndpointId, MonitorEndpointId, ReferenceEndpointId;
         public string HeadsetMicrophoneId, FallbackMicrophoneId, MicrophoneError;
         public bool SwitchMicrophone;
+        public bool OutputKeepCurrent, MicrophoneKeepCurrent;
         public string[] DefaultIds, DefaultNames;
         public string[] CaptureDefaultIds, CaptureDefaultNames;
         public Endpoint[] Endpoints;
@@ -45,7 +49,7 @@ namespace AudioFollow
         readonly Thread worker;
         Settings settings;
         SwitchMode mode = SwitchMode.Automatic;
-        HeadsetSensor sensor;
+        TriggerSession session;
         volatile bool stopping;
         volatile SwitchStatus status = new SwitchStatus { Message = "正在查询耳机连接状态…", Mode = "Automatic", Link = "Unknown" };
         bool reconnect;
@@ -60,14 +64,14 @@ namespace AudioFollow
 
         public SwitchEngine(Settings settings)
         {
-            this.settings = settings;
+            this.settings = settings.Copy();
             worker = new Thread(Run) { IsBackground = true, Name = "AudioFollow audio monitor" };
             worker.SetApartmentState(ApartmentState.MTA);
             worker.Start();
         }
 
         public void SetMode(SwitchMode value) { Enqueue(delegate { mode = value; }); }
-        public void Configure(Settings value) { Enqueue(delegate { settings = value; }); }
+        public void Configure(Settings value) { var copy = value.Copy(); Enqueue(delegate { settings = copy; reconnect = true; }); }
         public void Reconnect() { Enqueue(delegate { reconnect = true; }); }
         public void SetHotkeys(bool toggle, bool automatic)
         {
@@ -91,7 +95,9 @@ namespace AudioFollow
             AudioSnapshot audio = null;
             AudioSnapshot capture = null;
             string error = null, message = null, outputSwitchError = null, inputSwitchError = null, inputReadError = null;
-            using (sensor = new HeadsetSensor())
+            using (session = new TriggerSession(delegate(TriggerSettings value) {
+                return TriggerCatalog.Create(value, delegate { if (!stopping) wake.Set(); });
+            }))
             {
                 AudioCore core = null;
                 AudioCore microphones = null;
@@ -108,11 +114,10 @@ namespace AudioFollow
                             if (Interlocked.Exchange(ref audioDirty, 0) != 0 || requested) nextRead = 0;
                             if (Interlocked.Exchange(ref captureDirty, 0) != 0 || requested) nextCaptureRead = 0;
                             if (requested) { outputSwitchError = inputSwitchError = null; nextSwitch = nextMicrophoneSwitch = 0; }
-                            if (reconnect) { reconnect = false; sensor.Reconnect(); nextRead = nextCaptureRead = 0; }
+                            if (reconnect) nextRead = nextCaptureRead = 0;
                             Action devicesChanged = delegate { Interlocked.Exchange(ref audioDirty, 1); wake.Set(); };
                             if (core == null) core = new AudioCore(devicesChanged);
                             long now = clock.ElapsedMilliseconds;
-                            sensor.Poll(0);
                             if (audio == null || now >= nextRead)
                             {
                                 audio = core.Read();
@@ -135,28 +140,43 @@ namespace AudioFollow
                                     nextCaptureRead = now + 2000;
                                 }
                             }
+                            if (settings.Trigger == null || settings.Connected == null || settings.Disconnected == null)
+                                settings = settings.Upgrade(audio, capture);
+                            if (!session.HasDetector || reconnect)
+                            {
+                                reconnect = false;
+                                settings.Validate();
+                                session.Replace(settings.Trigger);
+                            }
+                            session.Poll(audio, inputReadError == null ? capture : null, now);
+                            if (settings.Trigger.Kind == TriggerKind.Hid && string.IsNullOrEmpty(settings.Trigger.DeviceId) &&
+                                !string.IsNullOrEmpty(session.Current.DeviceId))
+                                settings.Trigger.DeviceId = session.Current.DeviceId;
                             Endpoint headset = settings.Resolve(audio, "headset");
                             Endpoint monitor = settings.Resolve(audio, "monitor");
                             Endpoint reference = settings.Resolve(audio, "reference");
                             Endpoint headsetMicrophone = settings.ResolveMicrophone(capture, true);
                             Endpoint fallbackMicrophone = settings.ResolveMicrophone(capture, false);
-                            LinkReading link = sensor.Current;
-                            Route route = SwitchPlanner.Decide(mode, link.State, reference != null);
+                            TriggerReading link = session.Current;
+                            Route route = SwitchPlanner.Decide(mode, session.StableState,
+                                settings.Trigger.Kind != TriggerKind.Hid || reference != null);
+                            RouteTargets targets = route == Route.Headset ? settings.Connected : route == Route.Monitor ? settings.Disconnected : null;
                             Endpoint desired = route == Route.Headset ? headset : route == Route.Monitor ? monitor : null;
                             message = route == Route.None
-                                ? (mode == SwitchMode.Paused ? "已暂停自动切换" : "耳机状态未知，保留当前设备；可用快捷键切换")
-                                : route == Route.Headset ? "使用耳机设备" : "使用桌面设备";
+                                ? (mode == SwitchMode.Paused ? "已暂停自动切换" : "正在确认触发状态，保留当前设备")
+                                : route == Route.Headset ? "使用连接时设备组" : "使用断开时设备组";
                             error = null;
-                            if (route != Route.None && desired == null)
-                                error = "目标输出不可用或同名设备有歧义，请在设置中选择设备。";
+                            if (targets != null && !targets.Output.KeepCurrent && desired == null)
+                                error = "指定的声音输出不可用，已保留当前输出。请检查或重新选择。";
                             if (desired == null || audio.Defaults.All(id => id == desired.Id)) outputSwitchError = null;
                             if (desired != null && audio.Defaults.Any(id => id != desired.Id))
                             {
                                 if (now >= nextSwitch)
                                 {
                                     nextSwitch = now + 2000;
-                                    try { core.SetAllRoles(desired.Id); audio = core.Read(); audioReads++; outputSwitchError = null; }
-                                    catch (Exception ex) { outputSwitchError = "输出切换失败：" + ex.Message; }
+                                    DirectionResult applied = RouteApplier.Apply(targets.Output, audio, 0, core.SetAllRoles, core.Read);
+                                    audio = applied.Snapshot; if (applied.Changed) audioReads++;
+                                    outputSwitchError = applied.Error;
                                 }
                                 error = outputSwitchError;
                             }
@@ -164,7 +184,7 @@ namespace AudioFollow
                             Endpoint desiredMicrophone = route == Route.Headset ? headsetMicrophone : route == Route.Monitor ? fallbackMicrophone : null;
                             if (!settings.SwitchMicrophone || route == Route.None || desiredMicrophone == null ||
                                 capture.Defaults.All(id => id == desiredMicrophone.Id)) inputSwitchError = null;
-                            if (settings.SwitchMicrophone && route != Route.None && inputReadError == null)
+                            if (settings.SwitchMicrophone && targets != null && !targets.Microphone.KeepCurrent && inputReadError == null)
                             {
                                 if (desiredMicrophone == null) microphoneError = "目标麦克风不可用或名称重复，已保留当前输入。请在设备设置中选择。";
                                 else if (capture.Defaults.Any(id => id != desiredMicrophone.Id))
@@ -172,20 +192,24 @@ namespace AudioFollow
                                     if (now >= nextMicrophoneSwitch)
                                     {
                                         nextMicrophoneSwitch = now + 2000;
-                                        try { microphones.SetAllRoles(desiredMicrophone.Id); capture = microphones.Read(); inputSwitchError = null; }
-                                        catch (Exception ex) { inputSwitchError = "麦克风切换失败：" + ex.Message; }
+                                        DirectionResult applied = RouteApplier.Apply(targets.Microphone, capture, 1, microphones.SetAllRoles, microphones.Read);
+                                        capture = applied.Snapshot; inputSwitchError = applied.Error;
                                     }
                                     microphoneError = inputSwitchError;
                                 }
                             }
                             status = new SwitchStatus {
                                 ProcessId = processId, UpdatedUtc = DateTime.UtcNow.ToString("o"),
-                                Mode = mode.ToString(), Link = link.State.ToString(), Evidence = link.Evidence,
+                                Mode = mode.ToString(), Link = link.State.ToString(), Evidence = link.Reason,
+                                Trigger = settings.Trigger, StableLink = session.StableState.ToString(),
+                                ObservedUtc = link.ObservedUtc.ToString("o"), DetectorGeneration = session.Generation,
                                 RawFrame = link.Raw, Message = message, Error = error,
                                 HeadsetEndpointId = headset == null ? null : headset.Id,
                                 MonitorEndpointId = monitor == null ? null : monitor.Id,
                                 ReferenceEndpointId = reference == null ? null : reference.Id,
                                 SwitchMicrophone = settings.SwitchMicrophone,
+                                OutputKeepCurrent = targets != null && targets.Output.KeepCurrent,
+                                MicrophoneKeepCurrent = targets != null && targets.Microphone.KeepCurrent,
                                 HeadsetMicrophoneId = headsetMicrophone == null ? null : headsetMicrophone.Id,
                                 FallbackMicrophoneId = fallbackMicrophone == null ? null : fallbackMicrophone.Id,
                                 MicrophoneError = microphoneError,
@@ -200,8 +224,8 @@ namespace AudioFollow
                                 string.Join(", ", audio.Defaults) + " | input=" + string.Join(", ", capture.Defaults) +
                                 " | micFollow=" + settings.SwitchMicrophone + " | " + error + " | " + microphoneError;
                             bool changed = entry != lastLog;
-                            if (changed) { AppFiles.Log(entry + " | " + link.Evidence); lastLog = entry; }
-                            string uiKey = entry + "|" + hotkeyToggle + "|" + hotkeyAutomatic + "|" +
+                            if (changed) { AppFiles.Log(entry + " | " + link.Reason); lastLog = entry; }
+                            string uiKey = entry + "|" + link.Reason + "|" + session.StableState + "|" + settings.Trigger.DeviceId + "|" + hotkeyToggle + "|" + hotkeyAutomatic + "|" +
                                 string.Join("|", audio.Endpoints.Concat(capture.Endpoints).Select(e => e.Id + ":" + e.State + ":" + e.Name));
                             if (uiKey != lastUiKey) { lastUiKey = uiKey; NotifyStatus(); }
                             if (now >= nextWrite || changed || requested)
@@ -217,8 +241,8 @@ namespace AudioFollow
                             string text = ex.Message;
                             status = new SwitchStatus {
                                 ProcessId = processId, UpdatedUtc = DateTime.UtcNow.ToString("o"),
-                                Mode = mode.ToString(), Link = sensor.Current.State.ToString(),
-                                Evidence = sensor.Current.Evidence, Message = "等待音频设备恢复", Error = text,
+                                Mode = mode.ToString(), Link = "Unknown", StableLink = "Unknown",
+                                Trigger = settings.Trigger, Evidence = text, Message = "等待设备恢复", Error = text,
                                 SwitchMicrophone = settings.SwitchMicrophone,
                                 DefaultIds = audio == null ? null : audio.Defaults,
                                 DefaultNames = audio == null ? null : audio.Defaults.Select(audio.NameOf).ToArray(),
@@ -234,9 +258,10 @@ namespace AudioFollow
                             if (microphones != null) { microphones.Dispose(); microphones = null; }
                             wake.WaitOne(1500);
                         }
-                        WaitHandle ready = sensor.ReadReady;
-                        if (ready == null) wake.WaitOne(1000);
-                        else WaitHandle.WaitAny(new WaitHandle[] { wake, ready }, 1000);
+                        WaitHandle ready = session.Ready;
+                        int wait = session.NextCheckMs(clock.ElapsedMilliseconds);
+                        if (ready == null) wake.WaitOne(wait);
+                        else WaitHandle.WaitAny(new WaitHandle[] { wake, ready }, wait);
                     }
                 }
                 finally { if (core != null) core.Dispose(); if (microphones != null) microphones.Dispose(); }

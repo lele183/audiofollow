@@ -64,9 +64,9 @@ namespace AudioFollow
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开设置", null, delegate { ShowSettings(); });
             menu.Items.Add(new ToolStripSeparator());
-            auto = new ToolStripMenuItem("自动跟随耳机连接", null, delegate { engine.SetMode(SwitchMode.Automatic); });
-            headset = new ToolStripMenuItem("手动使用耳机", null, delegate { engine.SetMode(SwitchMode.Headset); });
-            monitor = new ToolStripMenuItem("手动使用桌面设备", null, delegate { engine.SetMode(SwitchMode.Monitor); });
+            auto = new ToolStripMenuItem("自动跟随", null, delegate { engine.SetMode(SwitchMode.Automatic); });
+            headset = new ToolStripMenuItem("连接时设备", null, delegate { engine.SetMode(SwitchMode.Headset); });
+            monitor = new ToolStripMenuItem("断开时设备", null, delegate { engine.SetMode(SwitchMode.Monitor); });
             pause = new ToolStripMenuItem("暂停切换", null, delegate { engine.SetMode(SwitchMode.Paused); });
             menu.Items.AddRange(new ToolStripItem[] { auto, headset, monitor, pause, new ToolStripSeparator() });
             menu.Items.Add("重新检测设备", null, delegate { engine.Reconnect(); });
@@ -77,7 +77,7 @@ namespace AudioFollow
             ipc = new Ipc(HandleCommand);
             engine.StatusChanged += ScheduleUpdate;
             UpdateStatus();
-            AppFiles.Log("START version=1.2.0; toggleHotkey=" + hotkeys.ToggleRegistered + "; autoHotkey=" + hotkeys.AutoRegistered);
+            AppFiles.Log("START version=1.3.0-preview.1; toggleHotkey=" + hotkeys.ToggleRegistered + "; autoHotkey=" + hotkeys.AutoRegistered);
             if (!background) ShowSettings();
         }
 
@@ -144,10 +144,10 @@ namespace AudioFollow
         {
             switch (state)
             {
-                case "Connected": return "耳机已连接";
-                case "Disconnected": return "耳机已关闭 / 无线未连接";
+                case "Connected": return "设备已连接 / 可用";
+                case "Disconnected": return "设备未连接 / 不可用";
                 case "ReceiverMissing": return "接收器未插入";
-                default: return "正在确认耳机状态";
+                default: return "正在确认设备状态";
             }
         }
         readonly Icon iconGood = AppIcon(false), iconUnknown = AppIcon(true);

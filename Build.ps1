@@ -44,7 +44,8 @@ if (-not (Test-Path -LiteralPath $taskIcon)) {
 }
 if ($null -eq $taskIcoBytes) { $taskIcoBytes = [IO.File]::ReadAllBytes($taskIcon) }
 [IO.File]::WriteAllBytes((Join-Path $taskDist 'AudioSwitch.ico'), $taskIcoBytes)
-$taskCommon = @('/nologo', '/optimize+', '/platform:x64', '/codepage:65001', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll', "/win32manifest:$taskRoot\app.manifest")
+. (Join-Path $taskRoot 'CompilerReferences.ps1')
+$taskCommon = @('/nologo', '/optimize+', '/platform:x64', '/codepage:65001', "/win32manifest:$taskRoot\app.manifest") + $taskReferences
 & $taskCompiler @taskCommon /target:winexe "/win32icon:$taskIcon" "/out:$taskDist\AudioFollow.exe" @taskSources
 if ($LASTEXITCODE -ne 0) { throw 'Tray application build failed.' }
 & $taskCompiler @taskCommon /target:exe "/out:$taskDist\AudioSwitchCtl.exe" @taskSources

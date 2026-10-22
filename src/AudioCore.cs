@@ -7,7 +7,7 @@ namespace AudioFollow
 {
     public sealed class Endpoint
     {
-        public string Id, Name, Diagnostic;
+        public string Id, Name, Diagnostic, ContainerId, InstanceId, Transport;
         public int Flow;
         public uint State;
         public bool Active { get { return State == 1; } }
@@ -79,7 +79,14 @@ namespace AudioFollow
                             // Removed virtual devices can remain in MMDevice but reject property access.
                             diagnostic = "Friendly name unavailable: " + ex.ErrorCode.ToString("X8");
                         }
-                        result.Endpoints.Add(new Endpoint { Id = id, Name = name, State = state, Diagnostic = diagnostic, Flow = flow });
+                        var endpoint = new Endpoint { Id = id, Name = name, State = state, Diagnostic = diagnostic, Flow = flow };
+                        if (properties != null)
+                        {
+                            endpoint.ContainerId = ReadProperty(properties, new PropertyKey(new Guid("8c7ed206-3f8a-4827-b3ab-ae9e1faefc6c"), 2));
+                            endpoint.InstanceId = ReadProperty(properties, new PropertyKey(new Guid("78c34fc8-104a-4aca-9ea4-524d52996e57"), 256));
+                        }
+                        DeviceIdentity.Enrich(endpoint);
+                        result.Endpoints.Add(endpoint);
                     }
                     finally { Release(properties); Release(device); }
                 }
@@ -87,6 +94,20 @@ namespace AudioFollow
                 return result;
             }
             finally { Release(devices); }
+        }
+
+        static string ReadProperty(IPropertyStore store, PropertyKey key)
+        {
+            PropVariant value;
+            if (store.GetValue(ref key, out value) < 0) return null;
+            try
+            {
+                if (value.Type == 31) return Marshal.PtrToStringUni(value.Pointer);
+                if (value.Type == 72 && value.Pointer != IntPtr.Zero)
+                    return ((Guid)Marshal.PtrToStructure(value.Pointer, typeof(Guid))).ToString();
+                return null;
+            }
+            finally { PropVariantClear(ref value); }
         }
 
         string DefaultId(int role)

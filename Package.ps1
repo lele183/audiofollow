@@ -3,8 +3,9 @@ $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'Build.ps1')
 & (Join-Path $PSScriptRoot 'Test.ps1')
 $taskDist = Join-Path $PSScriptRoot 'dist\AudioFollow'
-$taskVersion = [Version](Get-Item -LiteralPath (Join-Path $taskDist 'AudioFollow.exe')).VersionInfo.FileVersion
-$taskTag = 'v{0}.{1}.{2}' -f $taskVersion.Major, $taskVersion.Minor, $taskVersion.Build
+$taskVersion = (Get-Item -LiteralPath (Join-Path $taskDist 'AudioFollow.exe')).VersionInfo.ProductVersion
+if ($taskVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw 'ProductVersion must be a release version.' }
+$taskTag = "v$taskVersion"
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
 $taskZip = Join-Path $Output "AudioFollow-$taskTag-win-x64.zip"
 Compress-Archive -Path (Join-Path $taskDist '*') -DestinationPath $taskZip -Force

@@ -71,7 +71,7 @@ namespace AudioFollow
         {
             device.Text = names != null && names.Length == 3 ? (names[1] ?? "未设置默认设备") : "正在读取…";
             if (problem != null) { detail.Text = "保留当前设备，请检查设置"; detail.ForeColor = Color.FromArgb(165, 72, 32); }
-            else { detail.ForeColor = UiTheme.Muted; detail.Text = !follow ? "保持当前输入，不自动切换" : ids != null && ids.Length == 3 && !string.IsNullOrEmpty(ids[1]) && ids.All(id => id == ids[1]) ? "系统、媒体、通话已统一" : "默认设备角色不一致"; }
+            else { detail.ForeColor = UiTheme.Muted; detail.Text = !follow ? (microphone ? "保持当前输入，不自动切换" : "保持当前输出，不自动切换") : ids != null && ids.Length == 3 && !string.IsNullOrEmpty(ids[1]) && ids.All(id => id == ids[1]) ? "系统、媒体、通话已统一" : "默认设备角色不一致"; }
             AccessibleName = (microphone ? "当前麦克风：" : "当前声音输出：") + device.Text;
         }
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -108,48 +108,50 @@ namespace AudioFollow
         readonly Func<SwitchStatus> read;
         readonly Action<Settings> save;
         readonly RouteCard output, input;
-        readonly Label connection, hint, error, saved;
-        readonly ComboBox headset, monitor, reference, headsetMic, fallbackMic;
+        readonly Label connection, hint, error, saved, inspection, methodHint;
+        readonly ComboBox method, trigger, headset, monitor, reference, headsetMic, fallbackMic;
         readonly ModeButton automatic, useHeadset, useMonitor, pause;
-        readonly Button devicesToggle;
-        readonly TableLayoutPanel devices;
+        readonly Button devicesToggle, check;
+        readonly TableLayoutPanel devices, referenceRow;
         readonly CheckBox startup, microphoneFollow;
         readonly bool preview;
+        readonly Func<TriggerKind, TriggerCandidate[]> previewCatalog;
         Settings initial;
-        bool populated, changing, expanded;
+        bool populated, changing, expanded, listed;
+        int catalogGeneration, checkGeneration;
+        System.Threading.CancellationTokenSource catalogCancel, checkCancel;
         string endpointFingerprint;
         public bool AllowClose;
 
         public SettingsForm(SwitchEngine engine, Settings settings, HotkeyWindow hotkeys, Action<Settings> save)
-            : this(delegate { return engine.Status; }, engine.SetMode, engine.Reconnect, settings, save, null) { }
+            : this(delegate { return engine.Status; }, engine.SetMode, engine.Reconnect, settings, save, null, null) { }
 
         internal SettingsForm(Func<SwitchStatus> read, Action<SwitchMode> setMode, Action reconnect,
-            Settings settings, Action<Settings> save, bool? previewStartup)
+            Settings settings, Action<Settings> save, bool? previewStartup, Func<TriggerKind, TriggerCandidate[]> catalog = null)
         {
-            this.read = read; this.save = save; initial = settings; preview = previewStartup.HasValue;
-            Text = "声随 AudioFollow"; Font = new Font("Microsoft YaHei UI", 9F);
+            this.read = read; this.save = save; initial = settings.Copy(); preview = previewStartup.HasValue; previewCatalog = catalog;
+            Text = "声随 AudioFollow · v1.3 预览版"; Font = new Font("Microsoft YaHei UI", 9F);
             AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(840, 620); MinimumSize = new Size(720, 570);
+            ClientSize = new Size(860, 620); MinimumSize = new Size(750, 570);
             StartPosition = FormStartPosition.CenterScreen; BackColor = UiTheme.Paper;
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             var root = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1,
-                Padding = new Padding(30, 26, 30, 22) };
+                Padding = new Padding(30, 24, 30, 22) };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); scroll.Controls.Add(root); Controls.Add(scroll);
             var header = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0) };
-            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65)); header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60)); header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
             var brand = Label("AudioFollow", 23, UiTheme.Ink, FontStyle.Bold); brand.Font = new Font("Bahnschrift", 25F);
             header.Controls.Add(brand);
             connection = Label("正在确认连接", 9, UiTheme.Green); connection.TextAlign = ContentAlignment.MiddleRight;
             connection.Anchor = AnchorStyles.Right; connection.Margin = new Padding(4, 16, 2, 0); header.Controls.Add(connection);
             root.Controls.Add(header);
-            root.Controls.Add(Label("声随，让声音和麦克风一起跟随耳机。", 10, UiTheme.Muted));
-            root.Controls.Add(Label("切换方式", 10, UiTheme.Ink, FontStyle.Bold));
-            var modes = new TableLayoutPanel { ColumnCount = 4, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 6, 0, 5) };
+            root.Controls.Add(Label("声随，让声音和麦克风跟随你选择的设备。", 10, UiTheme.Muted));
+            var modes = new TableLayoutPanel { ColumnCount = 4, AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 16, 0, 5) };
             for (int i = 0; i < 4; i++) modes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             automatic = AddMode(modes, "自动跟随", delegate { setMode(SwitchMode.Automatic); });
-            useHeadset = AddMode(modes, "使用耳机", delegate { setMode(SwitchMode.Headset); });
-            useMonitor = AddMode(modes, "使用桌面", delegate { setMode(SwitchMode.Monitor); });
+            useHeadset = AddMode(modes, "连接时设备", delegate { setMode(SwitchMode.Headset); });
+            useMonitor = AddMode(modes, "断开时设备", delegate { setMode(SwitchMode.Monitor); });
             pause = AddMode(modes, "暂停切换", delegate { setMode(SwitchMode.Paused); }); root.Controls.Add(modes);
             hint = Label("", 9, UiTheme.Muted); root.Controls.Add(hint);
             var routes = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Top, Height = 174, Margin = new Padding(0, 14, 0, 12) };
@@ -157,9 +159,6 @@ namespace AudioFollow
             output = new RouteCard(false) { Margin = new Padding(0, 0, 7, 0) };
             input = new RouteCard(true) { Margin = new Padding(7, 0, 0, 0) };
             routes.Controls.Add(output); routes.Controls.Add(input); root.Controls.Add(routes);
-            microphoneFollow = new CheckBox { Text = "麦克风也自动跟随", Checked = initial.SwitchMicrophone,
-                AutoSize = true, ForeColor = UiTheme.Ink, Margin = new Padding(0, 6, 0, 7), AccessibleName = "麦克风也自动跟随" };
-            microphoneFollow.CheckedChanged += delegate { if (!changing) SaveSelection(); }; root.Controls.Add(microphoneFollow);
             error = Label("", 9, Color.FromArgb(166, 53, 37)); root.Controls.Add(error);
             devicesToggle = new Button { Text = "配置设备  +", AutoSize = true, Anchor = AnchorStyles.Left, FlatStyle = FlatStyle.Flat,
                 ForeColor = UiTheme.Ink, Padding = new Padding(2, 5, 8, 5), Margin = new Padding(0, 2, 0, 0), Cursor = Cursors.Hand };
@@ -167,18 +166,36 @@ namespace AudioFollow
             devices = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, Visible = false,
                 Padding = new Padding(18), BackColor = Color.White, Margin = new Padding(0, 4, 0, 8) };
             devices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            devices.Controls.Add(Label("连接检测：当前适配 Barracuda X 2022 的 2.4G 接收器。", 9, UiTheme.Muted));
-            devices.Controls.Add(Label("耳机连接时", 10, UiTheme.Ink, FontStyle.Bold));
-            devices.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); headset = Combo(devices, "耳机连接时的声音输出");
-            devices.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); headsetMic = Combo(devices, "耳机连接时的麦克风");
-            devices.Controls.Add(Label("耳机断开时", 10, UiTheme.Ink, FontStyle.Bold));
-            devices.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); monitor = Combo(devices, "耳机断开时的声音输出");
-            devices.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); fallbackMic = Combo(devices, "耳机断开时的麦克风");
-            devices.Controls.Add(Label("耳机的关联播放设备（用于检查输出可用性）", 9, UiTheme.Muted)); reference = Combo(devices, "关联的耳机音频设备");
-            foreach (ComboBox combo in new[] { headset, monitor, reference, headsetMic, fallbackMic }) combo.DropDownClosed += delegate { RefreshStatus(); };
-            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 12, 0, 0) };
-            ActionButton(actions, "保存设备", SaveSelection); ActionButton(actions, "重新检测", reconnect);
+            devices.Controls.Add(Label("跟随哪个设备", 11, UiTheme.Ink, FontStyle.Bold));
+            devices.Controls.Add(Label("连接方式", 9, UiTheme.Muted)); method = Combo(devices, "连接方式");
+            method.Items.AddRange(new object[] { "专用 2.4G 无线检测", "USB 音频设备可用性", "蓝牙实际连接" });
+            devices.Controls.Add(Label("触发设备", 9, UiTheme.Muted)); trigger = Combo(devices, "触发设备");
+            methodHint = Label("", 9, UiTheme.Muted); devices.Controls.Add(methodHint);
+            inspection = Label("选择设备后可检查连接状态；保存前继续执行原配置。", 9, UiTheme.Muted); devices.Controls.Add(inspection);
+            var groups = new TableLayoutPanel { ColumnCount = 2, Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
+            groups.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); groups.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            var connected = Group(groups, "设备连接时", new Padding(0, 0, 12, 0));
+            connected.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); headset = Combo(connected, "连接时声音输出");
+            connected.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); headsetMic = Combo(connected, "连接时麦克风");
+            var disconnected = Group(groups, "设备断开时", new Padding(12, 0, 0, 0));
+            disconnected.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); monitor = Combo(disconnected, "断开时声音输出");
+            disconnected.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); fallbackMic = Combo(disconnected, "断开时麦克风"); devices.Controls.Add(groups);
+            referenceRow = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0) };
+            referenceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            referenceRow.Controls.Add(Label("专用无线检测的关联播放设备", 9, UiTheme.Muted)); reference = Combo(referenceRow, "关联播放设备"); devices.Controls.Add(referenceRow);
+            microphoneFollow = new CheckBox { Text = "麦克风也自动跟随", Checked = initial.SwitchMicrophone,
+                AutoSize = true, ForeColor = UiTheme.Ink, Margin = new Padding(0, 6, 0, 7), AccessibleName = "麦克风也自动跟随" };
+            devices.Controls.Add(microphoneFollow);
+            var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 12, 0, 0), WrapContents = true };
+            check = ActionButton(actions, "检查选中设备", InspectSelection);
+            ActionButton(actions, "刷新设备列表", LoadCandidates);
+            ActionButton(actions, "保存并应用", SaveSelection);
             saved = Label("", 9, UiTheme.Green); actions.Controls.Add(saved); devices.Controls.Add(actions); root.Controls.Add(devices);
+            method.SelectedIndexChanged += delegate { if (!changing) { CancelCheck(); UpdateMethodHint(); LoadCandidates(); Dirty(); } };
+            trigger.SelectedIndexChanged += delegate { if (!changing) { CancelCheck(); Recommend(); Dirty(); } };
+            foreach (var selector in new[] { headset, monitor, reference, headsetMic, fallbackMic })
+                selector.SelectedIndexChanged += delegate { if (!changing) Dirty(); };
+            microphoneFollow.CheckedChanged += delegate { if (!changing) Dirty(); };
             startup = new CheckBox { Text = "登录 Windows 后在后台启动", AutoSize = true, ForeColor = UiTheme.Ink,
                 Margin = new Padding(0, 14, 0, 10), Checked = previewStartup ?? Startup.Enabled };
             startup.CheckedChanged += delegate {
@@ -188,19 +205,38 @@ namespace AudioFollow
             };
             root.Controls.Add(startup);
             root.Controls.Add(Label("Ctrl + Alt + F10  切换设备    /    Ctrl + Alt + F11  恢复自动", 9, UiTheme.Muted));
-            root.Controls.Add(Label("关闭窗口后留在托盘；麦克风设置只改变默认输入，不会录音。", 9, UiTheme.Muted));
+            root.Controls.Add(Label("关闭窗口后留在托盘；只改变默认设备，不会录音。", 9, UiTheme.Muted));
             VisibleChanged += delegate { if (Visible) RefreshStatus(); };
             FormClosing += delegate(object sender, FormClosingEventArgs args) {
                 if (!AllowClose && args.CloseReason == CloseReason.UserClosing) { args.Cancel = true; Hide(); }
             };
             RefreshStatus();
         }
-        internal void SetDevicesExpanded(bool value) { expanded = value; devices.Visible = value; devicesToggle.Text = value ? "配置设备  −" : "配置设备  +"; devicesToggle.AccessibleDescription = value ? "设备设置已展开" : "设备设置已收起"; }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { catalogGeneration++; checkGeneration++; Cancel(ref catalogCancel); Cancel(ref checkCancel); }
+            base.Dispose(disposing);
+        }
+        static void Cancel(ref System.Threading.CancellationTokenSource source)
+        { if (source != null) { source.Cancel(); source.Dispose(); source = null; } }
+        void CancelCheck() { checkGeneration++; Cancel(ref checkCancel); check.Enabled = true; }
+        void Dirty() { saved.Text = "待保存"; saved.ForeColor = Color.FromArgb(165, 102, 32); }
+        internal void SetDevicesExpanded(bool value)
+        {
+            expanded = value; devices.Visible = value; devicesToggle.Text = value ? "配置设备  −" : "配置设备  +";
+            devicesToggle.AccessibleDescription = value ? "设备设置已展开" : "设备设置已收起";
+            if (value && !listed) LoadCandidates();
+        }
+        static TableLayoutPanel Group(TableLayoutPanel parent, string title, Padding margin)
+        {
+            var group = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, Margin = margin };
+            group.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); group.Controls.Add(Label(title, 10, UiTheme.Ink, FontStyle.Bold)); parent.Controls.Add(group); return group;
+        }
         static Label Label(string text, float size, Color color, FontStyle style = FontStyle.Regular)
         { return new Label { Text = text, AutoSize = true, Dock = DockStyle.Top, ForeColor = color, Font = new Font("Microsoft YaHei UI", size, style), Margin = new Padding(0, 4, 0, 5), UseMnemonic = false }; }
         static ComboBox Combo(TableLayoutPanel parent, string name)
         {
-            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 670, Margin = new Padding(0, 0, 0, 10), AccessibleName = name };
+            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 680, Margin = new Padding(0, 0, 0, 8), AccessibleName = name };
             parent.Controls.Add(combo); return combo;
         }
         static ModeButton AddMode(TableLayoutPanel parent, string text, Action action)
@@ -208,53 +244,183 @@ namespace AudioFollow
             var button = new ModeButton { Text = text, AccessibleName = text, Dock = DockStyle.Fill, Height = 45, Margin = new Padding(0, 0, 6, 0) };
             button.Click += delegate { action(); }; parent.Controls.Add(button); return button;
         }
-        static void ActionButton(FlowLayoutPanel parent, string text, Action action)
+        static Button ActionButton(FlowLayoutPanel parent, string text, Action action)
         {
             var button = new Button { Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = UiTheme.Ink,
                 Padding = new Padding(8, 5, 8, 5), Margin = new Padding(0, 0, 10, 0) };
-            button.FlatAppearance.BorderColor = UiTheme.Line; button.Click += delegate { action(); }; parent.Controls.Add(button);
+            button.FlatAppearance.BorderColor = UiTheme.Line; button.Click += delegate { action(); }; parent.Controls.Add(button); return button;
         }
-        static void Fill(ComboBox combo, Endpoint[] values, string id, string defaultName)
+        sealed class Choice
+        {
+            public EndpointTarget Target;
+            public string Text;
+            public override string ToString() { return Text; }
+        }
+        static void Fill(ComboBox combo, Endpoint[] values, EndpointTarget selected, bool allowKeep = true)
         {
             combo.BeginUpdate();
             try
             {
-                combo.Items.Clear(); combo.Items.Add(new Endpoint { Id = "", Name = "自动匹配：" + defaultName, State = 1 });
-                foreach (Endpoint endpoint in values.OrderBy(e => !e.Active).ThenBy(e => e.Name)) combo.Items.Add(endpoint);
-                combo.SelectedIndex = 0;
-                for (int i = 1; i < combo.Items.Count; i++) if (((Endpoint)combo.Items[i]).Id == id) combo.SelectedIndex = i;
-                if (!string.IsNullOrEmpty(id) && combo.SelectedIndex == 0) { combo.Items.Add(new Endpoint { Id = id, Name = "已保存设备暂不可用：" + id, State = 4 }); combo.SelectedIndex = combo.Items.Count - 1; }
+                combo.Items.Clear();
+                if (allowKeep) combo.Items.Add(new Choice { Target = EndpointTarget.Keep(), Text = "保持当前" });
+                int ordinal = 0;
+                foreach (Endpoint endpoint in values.OrderBy(e => !e.Active).ThenBy(e => e.Name).ThenBy(e => e.Id))
+                    combo.Items.Add(new Choice { Target = EndpointTarget.For(endpoint), Text = endpoint.ToString() +
+                        (values.Count(e => e.Name == endpoint.Name) > 1 ? " · 同名设备 " + (++ordinal) : "") });
+                combo.SelectedIndex = allowKeep && selected.KeepCurrent ? 0 : -1;
+                for (int i = allowKeep ? 1 : 0; i < combo.Items.Count; i++)
+                    if (DeviceIdentity.Same(((Choice)combo.Items[i]).Target.EndpointId, selected.EndpointId)) combo.SelectedIndex = i;
+                if (combo.SelectedIndex < 0)
+                {
+                    combo.Items.Add(new Choice { Target = selected, Text = string.IsNullOrEmpty(selected.EndpointId) ?
+                        "请选择设备或保持当前" : "已保存设备不可用：" + (selected.DisplayName ?? "请重新选择") });
+                    combo.SelectedIndex = combo.Items.Count - 1;
+                }
             }
             finally { combo.EndUpdate(); }
         }
-        string Id(ComboBox combo) { return combo.SelectedItem == null ? "" : ((Endpoint)combo.SelectedItem).Id; }
+        static EndpointTarget Target(ComboBox combo)
+        { return combo.SelectedItem == null ? new EndpointTarget() : ((Choice)combo.SelectedItem).Target; }
+        TriggerSettings SelectedTrigger { get { var item = trigger.SelectedItem as TriggerCandidate; return item == null ? null : item.Settings; } }
+        void UpdateMethodHint()
+        {
+            referenceRow.Visible = method.SelectedIndex == 0;
+            methodHint.Text = method.SelectedIndex == 0 ? "读取已适配接收器的无线状态，可区分耳机关机和接收器在场。" : method.SelectedIndex == 1 ?
+                "判断音频端点是否可用；不能判断常插接收器的无线耳机是否开机。" : "已配对仅用于列出设备；跟随所选蓝牙传输的实际连接。";
+        }
+        AudioSnapshot Snapshot(bool capture)
+        {
+            SwitchStatus state = read();
+            return new AudioSnapshot { Endpoints = ((capture ? state.CaptureEndpoints : state.Endpoints) ?? new Endpoint[0]).ToList() };
+        }
+        async void LoadCandidates()
+        {
+            if (!populated || method.SelectedIndex < 0) return;
+            listed = true; Cancel(ref catalogCancel); CancelCheck(); int request = ++catalogGeneration;
+            catalogCancel = new System.Threading.CancellationTokenSource(); var token = catalogCancel.Token;
+            TriggerKind kind = (TriggerKind)method.SelectedIndex;
+            TriggerSettings selected = SelectedTrigger;
+            if (selected == null || selected.Kind != kind) selected = initial.Trigger.Kind == kind ? initial.Trigger : null;
+            changing = true; trigger.Items.Clear(); changing = false;
+            inspection.Text = "正在查找设备… 原配置继续运行。";
+            try
+            {
+                AudioSnapshot playback = Snapshot(false), capture = Snapshot(true);
+                TriggerCandidate[] items = previewCatalog != null ? previewCatalog(kind) :
+                    await System.Threading.Tasks.Task.Run(delegate { return TriggerInspection.List(kind, playback, capture, token); });
+                if (IsDisposed || request != catalogGeneration || token.IsCancellationRequested) return;
+                changing = true;
+                trigger.BeginUpdate(); trigger.Items.Clear();
+                foreach (var group in items.GroupBy(i => i.Settings.DisplayName).Where(g => g.Count() > 1))
+                { int number = 0; foreach (var item in group.OrderBy(i => i.Settings.DeviceId)) item.Distinction = " · 同名设备 " + (++number); }
+                foreach (TriggerCandidate item in items) trigger.Items.Add(item);
+                trigger.SelectedIndex = -1;
+                if (selected != null)
+                {
+                    for (int i = 0; i < trigger.Items.Count; i++)
+                        if (DeviceIdentity.Same(((TriggerCandidate)trigger.Items[i]).Settings.DeviceId, selected.DeviceId)) trigger.SelectedIndex = i;
+                    if (trigger.SelectedIndex < 0 && !string.IsNullOrEmpty(selected.DeviceId))
+                    { trigger.Items.Add(new TriggerCandidate { Settings = selected, Status = "已保存，当前未枚举到" }); trigger.SelectedIndex = trigger.Items.Count - 1; }
+                    if (trigger.SelectedIndex < 0 && kind == TriggerKind.Hid && trigger.Items.Count == 1) trigger.SelectedIndex = 0;
+                }
+                trigger.EndUpdate(); changing = false;
+                inspection.Text = trigger.SelectedItem == null ? (items.Length == 0 ? "未找到设备；连接或配对后刷新列表。" : "请选择触发设备，然后检查连接状态。") : trigger.SelectedItem.ToString();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { if (!IsDisposed && request == catalogGeneration) inspection.Text = "设备列表不可用：" + ex.Message; }
+        }
+        void Recommend()
+        {
+            TriggerSettings selected = SelectedTrigger;
+            if (selected == null) return;
+            SwitchStatus state = read(); changing = true;
+            Endpoint recommendedOutput = TriggerCatalog.Recommend(selected, state.Endpoints ?? new Endpoint[0], 0);
+            Endpoint recommendedInput = TriggerCatalog.Recommend(selected, state.CaptureEndpoints ?? new Endpoint[0], 1);
+            Fill(headset, state.Endpoints ?? new Endpoint[0], recommendedOutput == null ? new EndpointTarget() : EndpointTarget.For(recommendedOutput));
+            Fill(headsetMic, state.CaptureEndpoints ?? new Endpoint[0], recommendedInput == null ? new EndpointTarget() : EndpointTarget.For(recommendedInput));
+            changing = false;
+            inspection.Text = "已推荐唯一关联的设备；未能唯一确认的项目请手动选择。备用设备保持原选择。";
+        }
+        async void InspectSelection()
+        {
+            TriggerSettings selected = SelectedTrigger;
+            if (selected == null) { inspection.Text = "请先选择触发设备。"; return; }
+            CancelCheck(); int request = ++checkGeneration;
+            checkCancel = new System.Threading.CancellationTokenSource(); var token = checkCancel.Token;
+            check.Enabled = false;
+            try
+            {
+                SwitchStatus state = read();
+                if (state.Trigger != null && state.Trigger.Kind == selected.Kind &&
+                    (DeviceIdentity.Same(state.Trigger.DeviceId, selected.DeviceId) ||
+                    (selected.Kind == TriggerKind.Hid && string.IsNullOrEmpty(state.Trigger.DeviceId))))
+                    inspection.Text = TrayApp.LinkText(state.Link) + "：" + state.Evidence;
+                else if (preview) inspection.Text = "预览：" + trigger.SelectedItem;
+                else
+                {
+                    inspection.Text = "正在只读检查所选设备…";
+                    AudioSnapshot playback = Snapshot(false), capture = Snapshot(true);
+                    TriggerReading result = await System.Threading.Tasks.Task.Run(delegate { return TriggerInspection.Check(selected, playback, capture, token); });
+                    if (IsDisposed || request != checkGeneration || token.IsCancellationRequested) return;
+                    inspection.Text = TrayApp.LinkText(result.State.ToString()) + "：" + result.Reason;
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { if (!IsDisposed && request == checkGeneration) inspection.Text = "检查失败：" + ex.Message; }
+            finally { if (!IsDisposed && request == checkGeneration) check.Enabled = true; }
+        }
         void SaveSelection()
         {
             if (!populated) return;
-            var value = new Settings { HeadsetEndpointId = Id(headset), MonitorEndpointId = Id(monitor), ReferenceEndpointId = Id(reference),
-                HeadsetMicrophoneId = Id(headsetMic), FallbackMicrophoneId = Id(fallbackMic), SwitchMicrophone = microphoneFollow.Checked };
-            try { if (!preview) value.Save(); initial = value; save(value); saved.Text = "已保存"; }
-            catch (Exception ex) { changing = true; microphoneFollow.Checked = initial.SwitchMicrophone; changing = false; MessageBox.Show(this, ex.Message, "无法保存设置"); }
+            var value = initial.Copy(); value.Trigger = SelectedTrigger;
+            if (value.Trigger == null || (int)value.Trigger.Kind != method.SelectedIndex)
+            { saved.Text = "未保存：请等待设备列表并选择触发设备。"; return; }
+            value.Connected = new RouteTargets { Output = Target(headset), Microphone = Target(headsetMic) };
+            value.Disconnected = new RouteTargets { Output = Target(monitor), Microphone = Target(fallbackMic) };
+            value.ReferenceEndpointId = Target(reference).EndpointId;
+            value.SwitchMicrophone = microphoneFollow.Checked;
+            // Keep these fields for old control scripts and a documented downgrade path.
+            value.HeadsetEndpointId = value.Connected.Output.EndpointId; value.MonitorEndpointId = value.Disconnected.Output.EndpointId;
+            value.HeadsetMicrophoneId = value.Connected.Microphone.EndpointId; value.FallbackMicrophoneId = value.Disconnected.Microphone.EndpointId;
+            try
+            {
+                value.Validate(true); if (!preview) value.Save(); initial = value.Copy(); save(value);
+                saved.Text = "已保存并应用"; saved.ForeColor = UiTheme.Green;
+            }
+            catch (Exception ex) { saved.Text = "未保存：" + ex.Message; saved.ForeColor = Color.FromArgb(166, 53, 37); }
         }
         public void RefreshStatus()
         {
-            SwitchStatus state = read(); connection.Text = TrayApp.LinkText(state.Link);
+            SwitchStatus state = read(); connection.Text = state.Mode == "Automatic" && state.StableLink == "Unknown" ? "正在确认连接" : TrayApp.LinkText(state.Link);
             connection.ForeColor = state.Link == "Connected" ? UiTheme.Green : UiTheme.Muted;
-            output.SetDevice(state.DefaultNames, state.DefaultIds, true, state.Error);
-            input.SetDevice(state.CaptureDefaultNames, state.CaptureDefaultIds, state.SwitchMicrophone, state.MicrophoneError);
+            output.SetDevice(state.DefaultNames, state.DefaultIds, !state.OutputKeepCurrent, state.Error);
+            input.SetDevice(state.CaptureDefaultNames, state.CaptureDefaultIds, state.SwitchMicrophone && !state.MicrophoneKeepCurrent, state.MicrophoneError);
             automatic.Selected = state.Mode == "Automatic"; useHeadset.Selected = state.Mode == "Headset";
             useMonitor.Selected = state.Mode == "Monitor"; pause.Selected = state.Mode == "Paused";
-            hint.Text = state.Mode == "Automatic" ? (state.Link == "Unknown" ? "连接状态待确认，暂时保留当前设备。" : "耳机连上用耳机，断开后回到桌面设备。") : state.Mode == "Paused" ? "已暂停。选择「自动跟随」继续。" : "已固定设备。选择「自动跟随」恢复跟随连接。";
+            hint.Text = state.Mode == "Automatic" ? (state.Trigger == null ? "正在确认触发设备…" : "正在跟随：" + state.Trigger.DisplayName +
+                (state.StableLink == "Unknown" ? "；正在确认：" + (state.Evidence ?? "等待连接信息") : "")) : state.Mode == "Paused" ?
+                "已暂停切换，连接检测仍在继续。" : "已固定设备组。选择「自动跟随」恢复连接规则。";
             error.Text = state.Error ?? state.MicrophoneError ?? (!state.HotkeyToggleRegistered || !state.HotkeyAutomaticRegistered ? "部分快捷键不可用，可使用窗口或托盘菜单。" : ""); error.Visible = error.Text.Length > 0;
             if (state.Endpoints == null || state.CaptureEndpoints == null) return;
             string fingerprint = string.Join("|", state.Endpoints.Concat(state.CaptureEndpoints).Select(e => e.Id + ":" + e.State + ":" + e.Name));
             if (fingerprint == endpointFingerprint || new[] { headset, monitor, reference, headsetMic, fallbackMic }.Any(c => c.DroppedDown)) return;
-            string h = populated ? Id(headset) : initial.HeadsetEndpointId, m = populated ? Id(monitor) : initial.MonitorEndpointId;
-            string r = populated ? Id(reference) : initial.ReferenceEndpointId, hm = populated ? Id(headsetMic) : initial.HeadsetMicrophoneId;
-            string fm = populated ? Id(fallbackMic) : initial.FallbackMicrophoneId;
-            Fill(headset, state.Endpoints, h, Settings.HeadsetName); Fill(monitor, state.Endpoints, m, Settings.MonitorName); Fill(reference, state.Endpoints, r, Settings.ReferenceName);
-            Fill(headsetMic, state.CaptureEndpoints, hm, Settings.HeadsetMicrophoneName); Fill(fallbackMic, state.CaptureEndpoints, fm, Settings.FallbackMicrophoneName);
-            populated = true; endpointFingerprint = fingerprint;
+            changing = true;
+            if (!populated)
+            {
+                initial = initial.Upgrade(Snapshot(false), Snapshot(true)); method.SelectedIndex = (int)initial.Trigger.Kind;
+                if (initial.Trigger.Kind == TriggerKind.Hid && string.IsNullOrEmpty(initial.Trigger.DeviceId) &&
+                    state.Trigger != null && state.Trigger.Kind == TriggerKind.Hid)
+                    initial.Trigger = Json.Decode<TriggerSettings>(Json.Encode(state.Trigger));
+                trigger.Items.Add(new TriggerCandidate { Settings = initial.Trigger, Status = "当前配置" }); trigger.SelectedIndex = 0;
+                microphoneFollow.Checked = initial.SwitchMicrophone; UpdateMethodHint();
+            }
+            Fill(headset, state.Endpoints, populated ? Target(headset) : initial.Connected.Output);
+            Fill(monitor, state.Endpoints, populated ? Target(monitor) : initial.Disconnected.Output);
+            Fill(headsetMic, state.CaptureEndpoints, populated ? Target(headsetMic) : initial.Connected.Microphone);
+            Fill(fallbackMic, state.CaptureEndpoints, populated ? Target(fallbackMic) : initial.Disconnected.Microphone);
+            Endpoint physical = initial.Resolve(new AudioSnapshot { Endpoints = state.Endpoints.ToList() }, "reference");
+            Fill(reference, state.Endpoints, populated ? Target(reference) : physical == null ? new EndpointTarget { EndpointId = initial.ReferenceEndpointId, DisplayName = Settings.ReferenceName } : EndpointTarget.For(physical), false);
+            populated = true; endpointFingerprint = fingerprint; changing = false;
         }
     }
 }

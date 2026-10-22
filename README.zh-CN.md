@@ -1,130 +1,98 @@
-# 声随 AudioFollow 使用说明
+# 声随 · AudioFollow
 
-AudioFollow 是 Windows 11 原生托盘应用。耳机连接时切换到耳机输出和耳机麦克风，断开时回到桌面输出和备用麦克风。新名称不再使用耳机品牌；当前连接检测仍专门适配 `1532:0552` 接收器。
+选择一个触发设备，让 Windows 11 的声音输出和麦克风随连接状态切换。原生中文托盘应用，使用 .NET Framework 4.8，无联网服务、遥测或额外运行时。
 
-## 设备与规则
+**v1.3.0-preview.1 是预览版。** 已完成自动检查和本机状态、路由验证；本轮尚未重新完成耳机物理开关机、USB 物理插拔、蓝牙真实连接/断开及睡眠恢复验收。v1.2.0 稳定版继续保留。详细范围见 [验收记录](docs/ACCEPTANCE-v1.3.md)。
 
-| 条件 | 播放设备默认值 | 录音设备默认值 |
-| --- | --- | --- |
-| 耳机已与 2.4G 接收器连接 | `扬声器 (7.1 Surround Sound)` | `麦克风 (Razer Barracuda X 2.4)` |
-| 关闭、无线断开、切到蓝牙或接收器拔出 | `XV271U M3 (NVIDIA High Definition Audio)` | `麦克风 (Realtek(R) Audio)` |
-| HID 状态未知 | 保留当前输出 | 保留当前输入 |
+![AudioFollow 设置界面，模拟设备数据](docs/ui-v1.3.png)
 
-关联播放端点是 `扬声器 (Razer Barracuda X 2.4)`。接收器保持插入时，这个端点通常仍处于 Active，程序通过 HID 无线状态确认耳机连接，不用端点 Active 推断耳机电源。
+## 下载与安装
 
-播放与录音分别设置系统、媒体、通信三种角色，然后回读 Windows 验证。麦克风不可用、名称重复或切换失败时，保留原输入并显示输入错误，输出切换独立处理。失败时会尝试还原已改变的默认角色。程序不录音、不改音量或驱动设置。
-
-有多个同名活动设备时，请明确选择。保存了端点 ID 后，设备暂时不可用不会被同名其他设备替代；驱动重装后可重新选择，或切回“自动匹配”。
-
-## 安装与升级
-
-在下载包解压目录运行：
+从 [v1.3 预览版](https://github.com/lele183/audiofollow/releases/tag/v1.3.0-preview.1) 下载 `AudioFollow-v1.3.0-preview.1-win-x64.zip` 并解压。需要稳定版时使用 [v1.2.0](https://github.com/lele183/audiofollow/releases/tag/v1.2.0)。私有仓库需要登录获授权的账号。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -StartNow
 ```
 
-默认安装位置 `%LOCALAPPDATA%\Programs\AudioFollow`，数据目录 `%LOCALAPPDATA%\AudioFollow`。不需要管理员权限。`-NoStartup` 不启用登录启动；不传 `-StartNow` 时只安装。
+默认安装到 `%LOCALAPPDATA%\Programs\AudioFollow`，启用当前用户登录启动并在后台运行。双击托盘图标打开设置；关闭窗口后继续运行，托盘菜单“退出”才停止。可直接双击 `AudioFollow.exe` 便携运行。
 
-从旧版 Barracuda Switch 升级时：
+## 跟随哪个设备
 
-1. 正常退出正在运行的旧版和新版实例。
-2. 新版没有设置时，复制 `%LOCALAPPDATA%\BarracudaSwitch\settings.json` 到新目录，保留原文件。
-3. 保留原输出选择，新增麦克风按上述完整名称匹配，“麦克风也自动跟随”默认启用。
-4. 移除指向已知旧安装目录的 `BarracudaSwitch` 登录项，注册新版本；若旧项指向其他位置，提示从旧位置关闭。
-5. 旧版程序、设置、日志均保留，不再同时运行。
+展开“配置设备”，先选择连接方式，再选择触发设备：
 
-便携模式也能读取旧设置，但不会自动退出旧程序或处理旧登录项，升级推荐使用安装器。新数据目录已有设置时优先使用，不覆盖它。
+| 连接方式 | 连接依据 | 适用范围 |
+| --- | --- | --- |
+| 专用 2.4G 无线检测 | 已校验的 HID E3 查询和无线事件 | Barracuda X 2022 的 `1532:0552` 接收器，可区分耳机关机与接收器在场 |
+| USB 音频设备可用性 | 所选容器的播放/录音端点至少一个可用 | USB 耳机、声卡、扩展坞，支持仅有麦克风的设备 |
+| 蓝牙实际连接 | 所选 Windows AEP 设备及传输身份的实际连接属性 | 已配对蓝牙设备；LE 必须关联真实 LE 音频端点，附属电量服务不作为音频连接证据 |
 
-## 窗口与托盘
+**USB 可用性不能判断一直插着的无线接收器所对应的耳机是否开机。** 其他品牌 2.4G 耳机需要另外适配协议，不能仅替换 VID/PID 后发送现有命令。
 
-双击 `AudioFollow.exe` 或托盘图标打开设置，点击模式按钮选择自动、耳机、桌面或暂停。
+分别选择“设备连接时”和“设备断开时”的输出与麦克风。可明确选择“保持当前”，例如蓝牙音箱只切输出。新触发设备只在容器关联唯一时推荐连接目标，多个候选须自行选择；备用输出和备用麦克风保留原选择。
 
-- “自动跟随”：根据真实连接状态选择两组设备。
-- “使用耳机 / 使用桌面”：立即固定对应设备组，直到恢复自动或重启程序。
-- “暂停切换”：保留当前输出和输入。
-- “麦克风也自动跟随”：取消后只切换输出，保留输入。
-- “配置设备”：分别设置连接、断开时的输出和麦克风，再“保存设备”。
+**编辑和“检查选中设备”不会应用配置。** 点击“保存并应用”后才替换检测器；麦克风跟随开关同样需要保存。登录启动复选框单独即时生效。设备列表未完整枚举时可显示已收到的候选，稍后可刷新。
 
-两个设备卡片展示实际 Windows 默认设备及三角色是否一致。连接未知或设备错误时会提示下一步。窄窗口和展开设置可滚动；所有控件可用 Tab、方向键及空格操作。
+设备按固定标识绑定，名称只用于展示。同名或驱动重装后的设备不会自动替代保存的设备。指定目标暂不可用时保留该方向当前默认设备，并显示错误；另一个方向独立处理。
 
-关闭窗口会隐藏到托盘，Windows 11 可能把图标放在任务栏 `^` 内。托盘右键“退出”或 `Stop.cmd` 停止程序。退出时保留当前默认设备，下次启动回到自动模式。
+## 模式与保护行为
 
-`Ctrl + Alt + F10` 在耳机和桌面设备间手动切换，`Ctrl + Alt + F11` 恢复自动。快捷键被占用时窗口显示提示，仍可使用模式按钮或托盘菜单。
+- 自动跟随：连接持续 500 毫秒后应用连接组，断开持续 1.5 秒后应用断开组。
+- 连接时设备 / 断开时设备：手动固定设备组，直到恢复自动或重启程序。
+- 暂停切换：保持当前设备，后台仍更新连接状态。
+- 检测未知、初始化未完成或查询失败：保持当前设备，显示原因并重试。
+- 睡眠恢复、更换触发器：重新确认连接，旧检测器的延迟回调不能更改新配置。
 
-## 登录启动
+播放和录音各自的系统、媒体、通信三种默认角色一起设置并回读，切换失败时按原有逻辑回滚。程序不录音、不修改音量。专用 HID 模式保留关联播放设备不可用时回到备用组的兼容保护。
 
-勾选“登录 Windows 后在后台启动”，或执行 `Enable-Startup.cmd`。它添加当前用户：
+| 操作 | 快捷键 |
+| --- | --- |
+| 手动切换连接组 / 断开组 | Ctrl + Alt + F10 |
+| 恢复自动跟随 | Ctrl + Alt + F11 |
 
-```text
-HKCU\Software\Microsoft\Windows\CurrentVersion\Run\AudioFollow
-"<当前程序目录>\AudioFollow.exe" --background
-```
+通话和播放软件需要选择“默认 / 跟随系统”。固定绑定设备或已经打开音频流的软件可能需要重新选择设备或重启通话。
 
-取消勾选或 `Disable-Startup.cmd` 撤销。`Stop.cmd` 只停止进程，不改变登录项。移动便携目录后，须在新位置重新启用登录启动；实际注销再登录后的启动应单独验证。
+## 升级与回退
 
-## 实机检查
+旧配置自动在内存中升级为专用 HID 检测，保留播放、麦克风和跟随开关。首次保存新版配置前，将原文件原样复制为 `%LOCALAPPDATA%\AudioFollow\settings.json.pre-v1.3.bak`；备份不会被后续保存覆盖。未点击保存时不会重写原配置。
 
-1. 保持接收器插入，关闭耳机，检查输出回到显示器，输入回到 Realtek 或你选择的备用麦克风。
-2. 打开耳机并等待无线连接，检查输出为 7.1，输入为 Razer 或配置的耳机麦克风。
-3. 再关闭耳机，两组默认设备应回到桌面配置，无需拔接收器。
-4. 用快捷键测试手动切换，恢复自动后关闭设置窗口，确认托盘继续运行。
-5. 在使用系统默认设备的软件中试听和测试麦克风。端点回读只能证明 Windows 设置，不能证明实际出声或录音质量。
+回退到 v1.2.0：退出预览版，保留当前 `settings.json` 副本，将上述备份复制回 `settings.json`，再从 v1.2.0 解压目录运行安装器。若从未保存新版配置，可直接安装稳定版。旧 BarracudaSwitch 程序和设置也继续保留，避免同时运行两版。
 
-程序优先处理无线事件，每 15 秒发送一次只读状态查询。音频变化由 Windows 通知触发，另有 30 秒快照兜底。设备和 HID 工作在后台线程。
+## 开发与验证
 
-## 命令行
+Windows 11 x64、.NET Framework 4.8、Windows 10/11 SDK（UnionMetadata）及 .NET Framework 4.8 引用程序集。使用系统 C# 编译器，不依赖 NuGet；用户运行发行包不需要 SDK。
 
 ```powershell
-.\AudioSwitchCtl.exe --status
-.\AudioSwitchCtl.exe --diagnose
-.\AudioSwitchCtl.exe --headset
-.\AudioSwitchCtl.exe --monitor
-.\AudioSwitchCtl.exe --toggle
+.\Build.ps1      # dist\AudioFollow
+.\Test.ps1       # 88 项离线检查，包含原有 39 项
+.\Preview.ps1    # 10 种模拟 UI 布局和交互检查，不改变默认设备
+.\Package.ps1    # 构建、离线检查、ZIP、SHA-256
+# 以下为主动实机验收，会临时修改真实默认设备；先退出托盘程序
+.\tools\Verify-Hardware.ps1 -Run
+# 已安装后台程序的性能采样
+.\tools\Measure-Performance.ps1 -Seconds 30
+```
+
+`src/` 包含 CoreAudio、HID/USB/蓝牙检测器、托盘和界面；`tests/` 为可控制时间的无硬件检查。`build/`、`dist/`、`release/` 和本机诊断、设备 ID 均不提交到 Git。性能记录与限制见 [PERFORMANCE](docs/PERFORMANCE.md)。Windows CI 构建、测试、预览并上传包。
+
+## 诊断与卸载
+
+在安装目录运行：
+
+```powershell
+.\AudioSwitchCtl.exe --status       # 活进程状态，包含触发器、原因、稳定状态和观测时间
+.\AudioSwitchCtl.exe --diagnose     # 独立回读 Windows 默认设备及当前触发器
+.\AudioSwitchCtl.exe --list-triggers Hid
+.\AudioSwitchCtl.exe --list-triggers UsbAudio
+.\AudioSwitchCtl.exe --list-triggers Bluetooth
+.\AudioSwitchCtl.exe --check-trigger .\draft-settings.json  # 只读，不保存、不路由
+.\AudioSwitchCtl.exe --headset      # 兼容命令：连接时设备组
+.\AudioSwitchCtl.exe --monitor      # 兼容命令：断开时设备组
 .\AudioSwitchCtl.exe --auto
 .\AudioSwitchCtl.exe --pause
 .\AudioSwitchCtl.exe --refresh
-.\AudioSwitchCtl.exe --show
-.\AudioSwitchCtl.exe --exit
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -KeepSettings
 ```
 
-控制命令需要当前托盘进程。`--status` 通过当前用户命名管道读取活状态；`--diagnose` 独立回读播放和录音默认设备，并附进程状态。未运行时它独立查询 HID。
+运行数据在 `%LOCALAPPDATA%\AudioFollow`。请勿公开包含本机设备 ID 或蓝牙地址的原始诊断文件。HID 45 秒未得到已验证响应会变为未知；蓝牙复查失败同样保留当前设备。
 
-停止托盘应用后可执行：
-
-```powershell
-.\AudioSwitchCtl.exe --probe 30
-.\AudioSwitchCtl.exe --verify-routing
-```
-
-`--probe` 输出协议查询和无线事件，不切换设备。`--verify-routing` 会实际测试两个输出及两个麦克风（跟随启用时）的全部默认角色，并在 finally 中恢复原输出和输入，再次回读验证。
-
-## 设置、日志与卸载
-
-`%LOCALAPPDATA%\AudioFollow\` 包含：
-
-- `settings.json`：五个设备选择和麦克风跟随选项。新版缺少设置时也会尝试读取旧目录设置。
-- `status.json`：状态变化立即更新，空闲每 30 秒心跳；正常退出删除。崩溃后可能残留，实时状态以 `--status` 为准。
-- `switcher.log`：模式、连接和设备切换结果；512 KiB 轮转，最多一份备份。
-
-日志和诊断含本机设备 ID，分享前请自行检查。
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\AudioFollow\uninstall.ps1"
-```
-
-默认删除新版登录启动、停止新版并移除默认安装目录和新数据。加 `-KeepSettings` 保留设置和日志；自定义或便携安装目录不会递归删除。旧版安装和数据始终保留。
-
-## 检测协议与构建
-
-硬件范围为 Razer Barracuda X 2022 / Macronix USB 接收器 `1532:0552`，厂商 HID 集合 `FF00`。仅发出填充到 64 字节的只读命令：
-
-```text
-01 80 06 50 41 0E SEQ 01 E3
-```
-
-校验对应 SEQ 的成功 ACK 后，接收 E3 `00` / `01`。被动无线事件必须包含完整 `20 02 01` 标记和合法连接值。电量、充电、媒体按键、USB 存在、超时都不是开关机证据。超过 45 秒没有经过校验的状态时保留当前设备。不发送配对、扫描、固件或耳机控制命令。
-
-源码目录运行 `Build.ps1`，生成 `dist\AudioFollow\AudioFollow.exe` 与控制程序。`Test.ps1` 覆盖 39 项检查，`Preview.ps1` 验证九个布局和控件操作，`Package.ps1` 输出发行 ZIP 与 SHA-256。使用 Windows 自带 .NET Framework 编译器，无 NuGet。模拟协议和 UI 检查不能代替物理连接、实际听音或录音验证。
-
-协议来源及第三方许可见 `THIRD-PARTY-NOTICES.txt`。本项目与 Razer Inc. 无关联，默认设备切换使用未公开的 Windows PolicyConfig COM 接口。
+检测结构见 [TRIGGERS](docs/TRIGGERS.md)，历史见 [CHANGELOG](CHANGELOG.md)，协议与许可见 [第三方声明](THIRD-PARTY-NOTICES.txt)。Windows 默认设备设置使用未公开的 PolicyConfig COM 接口，系统升级后可能需要兼容性更新。本项目与 Razer Inc. 无关联，发行包未作代码签名。
