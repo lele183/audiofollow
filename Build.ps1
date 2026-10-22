@@ -53,9 +53,13 @@ $taskRuntimeConfig = '<?xml version="1.0" encoding="utf-8"?><configuration><star
 foreach ($taskName in @('BarracudaSwitch.exe.config', 'AudioSwitchCtl.exe.config')) {
     [IO.File]::WriteAllText((Join-Path $taskDist $taskName), $taskRuntimeConfig, [Text.UTF8Encoding]::new($false))
 }
-foreach ($taskName in @('README.zh-CN.md', 'THIRD-PARTY-NOTICES.txt', 'Start.cmd', 'Enable-Startup.cmd', 'Disable-Startup.cmd', 'Stop.cmd', 'AudioSwitch.ico')) {
+foreach ($taskName in @('README.md', 'README.zh-CN.md', 'CHANGELOG.md', 'THIRD-PARTY-NOTICES.txt', 'Start.cmd', 'Enable-Startup.cmd', 'Disable-Startup.cmd', 'Stop.cmd', 'AudioSwitch.ico')) {
     $taskSource = Join-Path $taskRoot $taskName
     if (Test-Path -LiteralPath $taskSource) { Copy-Item -LiteralPath $taskSource -Destination $taskDist -Force }
+}
+if (Test-Path -LiteralPath (Join-Path $taskRoot 'docs')) {
+    New-Item -ItemType Directory -Path (Join-Path $taskDist 'docs') -Force | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $taskRoot 'docs') -File | Copy-Item -Destination (Join-Path $taskDist 'docs') -Force
 }
 $taskVersion = (Get-Item -LiteralPath "$taskDist\BarracudaSwitch.exe").VersionInfo.FileVersion
 $taskScripts = @{
@@ -72,9 +76,13 @@ if (Test-Path -LiteralPath $existing) {
     & $existing --status *> $null
     if ($LASTEXITCODE -eq 0) { & $existing --exit | Out-Null; Start-Sleep -Milliseconds 600 }
 }
-foreach ($name in @('BarracudaSwitch.exe','AudioSwitchCtl.exe','BarracudaSwitch.exe.config','AudioSwitchCtl.exe.config','README.zh-CN.md','THIRD-PARTY-NOTICES.txt','Start.cmd','Enable-Startup.cmd','Disable-Startup.cmd','Stop.cmd','AudioSwitch.ico','install.ps1','uninstall.ps1')) {
+foreach ($name in @('BarracudaSwitch.exe','AudioSwitchCtl.exe','BarracudaSwitch.exe.config','AudioSwitchCtl.exe.config','README.md','README.zh-CN.md','CHANGELOG.md','THIRD-PARTY-NOTICES.txt','Start.cmd','Enable-Startup.cmd','Disable-Startup.cmd','Stop.cmd','AudioSwitch.ico','install.ps1','uninstall.ps1')) {
     $from = Join-Path $source $name
     if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination (Join-Path $Destination $name) -Force }
+}
+if (Test-Path -LiteralPath (Join-Path $source 'docs')) {
+    New-Item -ItemType Directory -Path (Join-Path $Destination 'docs') -Force | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $source 'docs') -File | Copy-Item -Destination (Join-Path $Destination 'docs') -Force
 }
 if (-not $NoStartup) { & (Join-Path $Destination 'AudioSwitchCtl.exe') --install-startup | Out-Null }
 if ($StartNow) { Start-Process -FilePath (Join-Path $Destination 'BarracudaSwitch.exe') -ArgumentList '--background' -WindowStyle Hidden }

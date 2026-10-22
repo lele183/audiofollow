@@ -99,6 +99,7 @@ namespace BarracudaSwitch
         LinkReading current = new LinkReading { State = LinkState.Unknown, Evidence = "Not queried yet" };
         public Action<string> Trace;
         public LinkReading Current { get { return current; } }
+        public System.Threading.WaitHandle ReadReady { get { return device == null ? null : device.ReadReady; } }
 
         public HeadsetSensor()
         {
@@ -136,8 +137,7 @@ namespace BarracudaSwitch
                     if (!device.Write(query, 500)) throw new TimeoutException("HID status query write timed out.");
                     lastQuery = now;
                 }
-                // Passive transition reports normally arrive on their own. Reads are interleaved
-                // with idle iterations so command/UI work and audio polling remain responsive.
+                // The pending overlapped read stays armed between worker wakeups.
                 if (!forceRead) return;
                 byte[] data = device.Read(timeoutMs);
                 if (data != null)

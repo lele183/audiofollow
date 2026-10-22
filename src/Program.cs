@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("Barracuda Switch")]
 [assembly: System.Reflection.AssemblyDescription("Automatic audio output routing for Razer Barracuda X 1532:0552")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
 [assembly: System.Runtime.InteropServices.ComVisible(false)]
 
 namespace BarracudaSwitch
@@ -52,7 +52,7 @@ namespace BarracudaSwitch
                     }
                     try
                     {
-                        AppFiles.Log("START version=1.0.0; process=" + Process.GetCurrentProcess().Id);
+                        AppFiles.Log("START version=1.1.0; process=" + Process.GetCurrentProcess().Id);
                         Application.EnableVisualStyles();
                         Application.SetCompatibleTextRenderingDefault(false);
                         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);

@@ -106,7 +106,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Programs\
 `%LOCALAPPDATA%\BarracudaSwitch\`
 
 - `settings.json`：用户保存的端点 ID。不保存音量、麦克风或耳机设置。
-- `status.json`：每两秒更新的状态快照；正常退出时移除。进程崩溃后可能遗留，应以 `--status` 的在线响应为准。
+- `status.json`：状态变化时更新，空闲时每 30 秒保存心跳；正常退出时移除。进程崩溃后可能遗留，应以 `--status` 的在线响应为准。
 - `switcher.log`：启动、模式、真实连接状态和音频切换结果。达到 512 KiB 后保留一份轮转。
 
 默认按完整端点名称匹配，优先要求唯一的活动端点。同名活动设备有多个时，请在设置里明确选择。手动保存的端点 ID 不会悄悄替换为同名其他设备；设备驱动重装后可能需要重新选择或切回“自动匹配”。

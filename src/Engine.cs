@@ -25,12 +25,13 @@ namespace BarracudaSwitch
     public sealed class SwitchStatus
     {
         public int ProcessId;
-        public string Version = "1.0.0";
+        public string Version = "1.1.0";
         public string UpdatedUtc, Mode, Link, Evidence, RawFrame, Message, Error;
         public string HeadsetEndpointId, MonitorEndpointId, ReferenceEndpointId;
         public string[] DefaultIds, DefaultNames;
         public Endpoint[] Endpoints;
         public bool HotkeyToggleRegistered, HotkeyAutomaticRegistered;
+        public long WorkerIterations, AudioReads, StatusWrites;
     }
 
     public sealed class SwitchEngine : IDisposable
@@ -47,6 +48,9 @@ namespace BarracudaSwitch
         bool hotkeyToggle, hotkeyAutomatic;
         volatile bool firstStatusWritten;
         string lastLog;
+        int audioDirty = 1;
+        readonly int processId = Process.GetCurrentProcess().Id;
+        public event Action StatusChanged;
 
         public SwitchStatus Status { get { return status; } }
 
@@ -77,7 +81,9 @@ namespace BarracudaSwitch
         void Run()
         {
             var clock = Stopwatch.StartNew();
-            long nextRead = 0, nextWrite = 0, nextSwitch = 0, nextHidRead = 0;
+            long nextRead = 0, nextWrite = 0, nextSwitch = 0;
+            long iterations = 0, audioReads = 0, statusWrites = 0;
+            string lastUiKey = null;
             AudioSnapshot audio = null;
             string error = null, message = null;
             using (sensor = new HeadsetSensor())
@@ -92,17 +98,17 @@ namespace BarracudaSwitch
                             Action command;
                             bool requested = false;
                             while (commands.TryDequeue(out command)) { command(); requested = true; }
-                            if (requested || wake.WaitOne(0)) nextRead = 0;
-                            if (reconnect) { reconnect = false; sensor.Reconnect(); nextRead = nextSwitch = nextHidRead = 0; }
-                            if (core == null) core = new AudioCore(delegate { wake.Set(); });
+                            iterations++;
+                            if (requested || Interlocked.Exchange(ref audioDirty, 0) != 0) nextRead = 0;
+                            if (reconnect) { reconnect = false; sensor.Reconnect(); nextRead = nextSwitch = 0; }
+                            if (core == null) core = new AudioCore(delegate { Interlocked.Exchange(ref audioDirty, 1); wake.Set(); });
                             long now = clock.ElapsedMilliseconds;
-                            bool readHid = now >= nextHidRead;
-                            sensor.Poll(readHid ? 100 : 5, readHid);
-                            if (readHid) nextHidRead = now + 200;
+                            sensor.Poll(0);
                             if (audio == null || now >= nextRead)
                             {
                                 audio = core.Read();
-                                nextRead = now + 3000;
+                                audioReads++;
+                                nextRead = now + 30000;
                             }
                             Endpoint headset = settings.Resolve(audio, "headset");
                             Endpoint monitor = settings.Resolve(audio, "monitor");
@@ -121,9 +127,10 @@ namespace BarracudaSwitch
                                 nextSwitch = now + 2000;
                                 core.SetAllRoles(desired.Id);
                                 audio = core.Read();
+                                audioReads++;
                             }
                             status = new SwitchStatus {
-                                ProcessId = Process.GetCurrentProcess().Id, UpdatedUtc = DateTime.UtcNow.ToString("o"),
+                                ProcessId = processId, UpdatedUtc = DateTime.UtcNow.ToString("o"),
                                 Mode = mode.ToString(), Link = link.State.ToString(), Evidence = link.Evidence,
                                 RawFrame = link.Raw, Message = message, Error = error,
                                 HeadsetEndpointId = headset == null ? null : headset.Id,
@@ -131,39 +138,55 @@ namespace BarracudaSwitch
                                 ReferenceEndpointId = reference == null ? null : reference.Id,
                                 DefaultIds = audio.Defaults, DefaultNames = audio.Defaults.Select(audio.NameOf).ToArray(),
                                 Endpoints = audio.Endpoints.ToArray(),
-                                HotkeyToggleRegistered = hotkeyToggle, HotkeyAutomaticRegistered = hotkeyAutomatic
+                                HotkeyToggleRegistered = hotkeyToggle, HotkeyAutomaticRegistered = hotkeyAutomatic,
+                                WorkerIterations = iterations, AudioReads = audioReads, StatusWrites = statusWrites
                             };
                             string entry = mode + " | " + link.State + " | " + message + " | " +
                                 string.Join(", ", audio.Defaults) + " | " + error;
-                            if (entry != lastLog) { AppFiles.Log(entry + " | " + link.Evidence); lastLog = entry; }
-                            if (now >= nextWrite || requested)
+                            bool changed = entry != lastLog;
+                            if (changed) { AppFiles.Log(entry + " | " + link.Evidence); lastLog = entry; }
+                            string uiKey = entry + "|" + hotkeyToggle + "|" + hotkeyAutomatic + "|" +
+                                string.Join("|", audio.Endpoints.Select(e => e.Id + ":" + e.State + ":" + e.Name));
+                            if (uiKey != lastUiKey) { lastUiKey = uiKey; NotifyStatus(); }
+                            if (now >= nextWrite || changed || requested)
                             {
+                                status.StatusWrites = ++statusWrites;
                                 AppFiles.WriteAtomic(AppFiles.StatusFile, Json.Encode(status));
                                 firstStatusWritten = true;
-                                nextWrite = now + 2000;
+                                nextWrite = now + 30000;
                             }
                         }
                         catch (Exception ex)
                         {
                             string text = ex.Message;
                             status = new SwitchStatus {
-                                ProcessId = Process.GetCurrentProcess().Id, UpdatedUtc = DateTime.UtcNow.ToString("o"),
+                                ProcessId = processId, UpdatedUtc = DateTime.UtcNow.ToString("o"),
                                 Mode = mode.ToString(), Link = sensor.Current.State.ToString(),
                                 Evidence = sensor.Current.Evidence, Message = "等待音频设备恢复", Error = text,
                                 DefaultIds = audio == null ? null : audio.Defaults,
                                 DefaultNames = audio == null ? null : audio.Defaults.Select(audio.NameOf).ToArray()
                             };
+                            NotifyStatus();
+                            lastUiKey = null;
                             if (text != lastLog) { try { AppFiles.Log("ERROR " + text); } catch { } lastLog = text; }
                             try { AppFiles.WriteAtomic(AppFiles.StatusFile, Json.Encode(status)); } catch { }
                             nextRead = 0;
                             if (core != null) { core.Dispose(); core = null; }
                             wake.WaitOne(1500);
                         }
-                        wake.WaitOne(sensor.Current.State == LinkState.ReceiverMissing || sensor.Current.State == LinkState.Unknown ? 150 : 20);
+                        WaitHandle ready = sensor.ReadReady;
+                        if (ready == null) wake.WaitOne(1000);
+                        else WaitHandle.WaitAny(new WaitHandle[] { wake, ready }, 1000);
                     }
                 }
                 finally { if (core != null) core.Dispose(); }
             }
+        }
+
+        void NotifyStatus()
+        {
+            Action changed = StatusChanged;
+            if (changed != null) changed();
         }
 
         public void Dispose()

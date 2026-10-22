@@ -90,13 +90,28 @@ namespace BarracudaSwitch
     public sealed class HidDevice : IDisposable
     {
         readonly SafeFileHandle handle;
+        readonly ManualResetEvent readReady = new ManualResetEvent(false);
+        IntPtr readBuffer, readOverlapped;
+        bool readPending, disposed;
         public readonly HidInfo Info;
+        public WaitHandle ReadReady { get { return readReady; } }
 
         public HidDevice(HidInfo info)
         {
             Info = info;
             handle = HidNative.CreateFile(info.Path, 0xc0000000, 3, IntPtr.Zero, 3, 0x40000000, IntPtr.Zero);
-            if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open Razer HID.");
+            if (handle.IsInvalid)
+            {
+                int error = Marshal.GetLastWin32Error();
+                handle.Dispose(); readReady.Dispose();
+                throw new Win32Exception(error, "Cannot open Razer HID.");
+            }
+            try
+            {
+                readBuffer = Marshal.AllocHGlobal(info.InputLength);
+                readOverlapped = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(NativeOverlapped)));
+            }
+            catch { Dispose(); throw; }
         }
 
         public bool Write(byte[] report, int timeoutMs)
@@ -109,10 +124,26 @@ namespace BarracudaSwitch
 
         public byte[] Read(int timeoutMs)
         {
-            var buffer = new byte[Info.InputLength];
-            int count = Io(buffer, false, timeoutMs);
+            if (!readPending)
+            {
+                readReady.Reset();
+                var state = new NativeOverlapped { EventHandle = readReady.SafeWaitHandle.DangerousGetHandle() };
+                Marshal.StructureToPtr(state, readOverlapped, false);
+                int immediate;
+                bool complete = HidNative.ReadFile(handle, readBuffer, Info.InputLength, out immediate, readOverlapped);
+                if (!complete && Marshal.GetLastWin32Error() != 997) throw new Win32Exception(Marshal.GetLastWin32Error());
+                readPending = true;
+            }
+            // Leave the read armed on timeout: Windows wakes the worker when a report arrives.
+            if (!readReady.WaitOne(timeoutMs)) return null;
+            int count;
+            bool success = HidNative.GetOverlappedResult(handle, readOverlapped, out count, false);
+            readPending = false;
+            if (!success) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (count < 0 || count > Info.InputLength) throw new InvalidOperationException("Invalid HID transfer length.");
             if (count == 0) return null;
-            if (count < buffer.Length) Array.Resize(ref buffer, count);
+            var buffer = new byte[count];
+            Marshal.Copy(readBuffer, buffer, 0, count);
             return buffer;
         }
 
@@ -157,7 +188,21 @@ namespace BarracudaSwitch
             }
         }
 
-        public void Dispose() { handle.Dispose(); }
+        public void Dispose()
+        {
+            if (disposed) return;
+            disposed = true;
+            if (readPending)
+            {
+                HidNative.CancelIoEx(handle, readOverlapped);
+                int count;
+                HidNative.GetOverlappedResult(handle, readOverlapped, out count, true);
+                readPending = false;
+            }
+            handle.Dispose(); readReady.Dispose();
+            if (readOverlapped != IntPtr.Zero) Marshal.FreeHGlobal(readOverlapped);
+            if (readBuffer != IntPtr.Zero) Marshal.FreeHGlobal(readBuffer);
+        }
     }
 
     static class HidNative
