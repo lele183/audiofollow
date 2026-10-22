@@ -1,0 +1,8 @@
+/build/
+/dist/
+/release/
+*.log
+*.tmp
+settings.json
+status.json
+.vs/
