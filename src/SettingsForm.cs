@@ -167,13 +167,14 @@ namespace AudioFollow
             devices = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Top, AutoSize = true, Visible = false,
                 Padding = new Padding(18), BackColor = Color.White, Margin = new Padding(0, 4, 0, 8) };
             devices.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            devices.Controls.Add(Label("连接检测：当前适配 Barracuda X 2022 的 2.4G 接收器。", 9, UiTheme.Muted));
             devices.Controls.Add(Label("耳机连接时", 10, UiTheme.Ink, FontStyle.Bold));
             devices.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); headset = Combo(devices, "耳机连接时的声音输出");
             devices.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); headsetMic = Combo(devices, "耳机连接时的麦克风");
             devices.Controls.Add(Label("耳机断开时", 10, UiTheme.Ink, FontStyle.Bold));
             devices.Controls.Add(Label("声音输出", 9, UiTheme.Muted)); monitor = Combo(devices, "耳机断开时的声音输出");
             devices.Controls.Add(Label("麦克风", 9, UiTheme.Muted)); fallbackMic = Combo(devices, "耳机断开时的麦克风");
-            devices.Controls.Add(Label("用于判断 2.4G 连接的音频设备", 9, UiTheme.Muted)); reference = Combo(devices, "关联的耳机音频设备");
+            devices.Controls.Add(Label("耳机的关联播放设备（用于检查输出可用性）", 9, UiTheme.Muted)); reference = Combo(devices, "关联的耳机音频设备");
             foreach (ComboBox combo in new[] { headset, monitor, reference, headsetMic, fallbackMic }) combo.DropDownClosed += delegate { RefreshStatus(); };
             var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 12, 0, 0) };
             ActionButton(actions, "保存设备", SaveSelection); ActionButton(actions, "重新检测", reconnect);
