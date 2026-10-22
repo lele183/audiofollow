@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     public enum LinkState { Unknown, Connected, Disconnected, ReceiverMissing }
 

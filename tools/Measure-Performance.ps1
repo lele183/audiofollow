@@ -1,7 +1,7 @@
 param([int]$Seconds = 30, [string]$Control, [string]$Output)
 $ErrorActionPreference = 'Stop'
 if ($Seconds -lt 5 -or $Seconds -gt 60) { throw 'Use 5..60 seconds.' }
-if (-not $Control) { $Control = Join-Path $env:LOCALAPPDATA 'Programs\BarracudaSwitch\AudioSwitchCtl.exe' }
+if (-not $Control) { $Control = Join-Path $env:LOCALAPPDATA 'Programs\AudioFollow\AudioSwitchCtl.exe' }
 $before = & $Control --status | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Start the installed switcher first.' }
 $process = Get-Process -Id $before.ProcessId
@@ -30,6 +30,8 @@ $result = [pscustomobject]@{
     Mode = $after.Mode
     Link = $after.Link
     Error = $after.Error
+    MicrophoneFollow = $after.SwitchMicrophone
+    MicrophoneError = $after.MicrophoneError
 }
 $json = $result | ConvertTo-Json
 if ($Output) { [IO.File]::WriteAllText($Output, $json, [Text.UTF8Encoding]::new($false)) }

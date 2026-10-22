@@ -7,12 +7,12 @@ using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
-[assembly: System.Reflection.AssemblyTitle("Barracuda Switch")]
-[assembly: System.Reflection.AssemblyDescription("Automatic audio output routing for Razer Barracuda X 1532:0552")]
-[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyTitle("AudioFollow - Voice and playback routing")]
+[assembly: System.Reflection.AssemblyDescription("Automatic playback and microphone routing for Windows 11")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
 [assembly: System.Runtime.InteropServices.ComVisible(false)]
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     static class Program
     {
@@ -25,7 +25,7 @@ namespace BarracudaSwitch
                 switch (command)
                 {
                     case "--help":
-                        Console.WriteLine("BarracudaSwitch.exe [--background]\r\nAudioSwitchCtl.exe --status|--headset|--monitor|--toggle|--auto|--pause|--refresh|--show|--exit\r\nAudioSwitchCtl.exe --diagnose|--probe [seconds]|--verify-routing|--install-startup|--uninstall-startup");
+                        Console.WriteLine("AudioFollow.exe [--background]\r\nAudioSwitchCtl.exe --status|--headset|--monitor|--toggle|--auto|--pause|--refresh|--show|--exit\r\nAudioSwitchCtl.exe --diagnose|--probe [seconds]|--verify-routing|--install-startup|--uninstall-startup");
                         return 0;
                     case "--install-startup": Startup.Set(true); Console.WriteLine(Startup.Command); return 0;
                     case "--uninstall-startup": Startup.Set(false); Console.WriteLine("Startup disabled."); return 0;
@@ -35,7 +35,7 @@ namespace BarracudaSwitch
                     case "--status": case "--headset": case "--monitor": case "--toggle":
                     case "--auto": case "--pause": case "--refresh": case "--show": case "--exit":
                         string reply;
-                        if (!Ipc.Send(command.Substring(2), out reply)) { Console.Error.WriteLine("Switcher is not running or did not respond. Run BarracudaSwitch.exe first."); return 2; }
+                        if (!Ipc.Send(command.Substring(2), out reply)) { Console.Error.WriteLine("Switcher is not running or did not respond. Run AudioFollow.exe first."); return 2; }
                         Console.WriteLine(reply);
                         return reply.StartsWith("ERROR") ? 1 : 0;
                     case "": case "--background": break;
@@ -52,7 +52,7 @@ namespace BarracudaSwitch
                     }
                     try
                     {
-                        AppFiles.Log("START version=1.1.0; process=" + Process.GetCurrentProcess().Id);
+                        AppFiles.Log("START version=1.2.0; process=" + Process.GetCurrentProcess().Id);
                         Application.EnableVisualStyles();
                         Application.SetCompatibleTextRenderingDefault(false);
                         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
@@ -82,13 +82,17 @@ namespace BarracudaSwitch
         static int Diagnose()
         {
             using (var audio = new AudioCore(null))
+            using (var microphones = new AudioCore(null, 1))
             {
                 AudioSnapshot snapshot = audio.Read();
+                AudioSnapshot capture = microphones.Read();
                 string running;
                 if (Ipc.Send("status", out running))
                 {
                     Console.WriteLine(Json.Encode(new {
                         Defaults = snapshot.Defaults, DefaultNames = snapshot.Defaults.Select(snapshot.NameOf).ToArray(),
+                        CaptureDefaults = capture.Defaults, CaptureDefaultNames = capture.Defaults.Select(capture.NameOf).ToArray(),
+                        CaptureEndpoints = capture.Endpoints,
                         Endpoints = snapshot.Endpoints, Running = Json.Decode<object>(running), Startup = Startup.Enabled,
                         DataFolder = AppFiles.Folder
                     }));
@@ -105,6 +109,8 @@ namespace BarracudaSwitch
                     }
                     Console.WriteLine(Json.Encode(new {
                         Defaults = snapshot.Defaults, DefaultNames = snapshot.Defaults.Select(snapshot.NameOf).ToArray(),
+                        CaptureDefaults = capture.Defaults, CaptureDefaultNames = capture.Defaults.Select(capture.NameOf).ToArray(),
+                        CaptureEndpoints = capture.Endpoints,
                         Endpoints = snapshot.Endpoints, Link = sensor.Current, Startup = Startup.Enabled,
                         DataFolder = AppFiles.Folder
                     }));
@@ -146,11 +152,17 @@ namespace BarracudaSwitch
             if (Ipc.Send("status", out running)) throw new InvalidOperationException("Exit the tray app before --verify-routing.");
             var report = new List<object>();
             using (var audio = new AudioCore(null))
+            using (var microphones = new AudioCore(null, 1))
             {
                 AudioSnapshot before = audio.Read();
+                AudioSnapshot captureBefore = microphones.Read();
                 Settings settings = Settings.Load();
                 Endpoint headset = settings.Resolve(before, "headset"), monitor = settings.Resolve(before, "monitor");
+                Endpoint headsetMicrophone = settings.ResolveMicrophone(captureBefore, true);
+                Endpoint fallbackMicrophone = settings.ResolveMicrophone(captureBefore, false);
                 if (headset == null || monitor == null) throw new InvalidOperationException("Both target outputs must be active for the routing test.");
+                if (settings.SwitchMicrophone && (headsetMicrophone == null || fallbackMicrophone == null))
+                    throw new InvalidOperationException("Both selected microphones must be active for the routing test.");
                 try
                 {
                     foreach (Endpoint target in new[] { headset, monitor })
@@ -159,12 +171,21 @@ namespace BarracudaSwitch
                         AudioSnapshot after = audio.Read();
                         report.Add(new { Target = target.Name, VerifiedAllThreeRoles = after.Defaults.All(id => id == target.Id), Defaults = after.Defaults });
                     }
+                    if (settings.SwitchMicrophone)
+                        foreach (Endpoint target in new[] { headsetMicrophone, fallbackMicrophone })
+                        {
+                            microphones.SetAllRoles(target.Id);
+                            AudioSnapshot after = microphones.Read();
+                            report.Add(new { Microphone = target.Name, VerifiedAllThreeRoles = after.Defaults.All(id => id == target.Id), Defaults = after.Defaults });
+                        }
                 }
                 finally
                 {
-                    audio.RestoreDefaults(before.Defaults);
+                    try { audio.RestoreDefaults(before.Defaults); }
+                    finally { microphones.RestoreDefaults(captureBefore.Defaults); }
                     AudioSnapshot restored = audio.Read();
                     if (!before.Defaults.SequenceEqual(restored.Defaults)) throw new InvalidOperationException("Original output restoration did not verify.");
+                    if (!captureBefore.Defaults.SequenceEqual(microphones.Read().Defaults)) throw new InvalidOperationException("Original microphone restoration did not verify.");
                 }
                 Console.WriteLine(Json.Encode(new { Tests = report, OriginalDefaultsRestored = true, OriginalDefaults = before.Defaults }));
                 return 0;

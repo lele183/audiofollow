@@ -1,6 +1,6 @@
-param([string]$Control)
+param([string]$Control, [int]$ReconnectCount = 2)
 $ErrorActionPreference = 'Stop'
-if (-not $Control) { $Control = Join-Path $env:LOCALAPPDATA 'Programs\BarracudaSwitch\AudioSwitchCtl.exe' }
+if (-not $Control) { $Control = Join-Path $env:LOCALAPPDATA 'Programs\AudioFollow\AudioSwitchCtl.exe' }
 function Get-LiveStatus {
     $result = & $Control --status | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw 'Live IPC failed.' }
@@ -17,30 +17,41 @@ function Wait-State([scriptblock]$Predicate) {
 }
 $before = Get-LiveStatus
 if ($before.Mode -ne 'Automatic') { throw 'Restore automatic mode before this test.' }
+if (-not $before.SwitchMicrophone) { throw 'Enable microphone following before this test.' }
 try {
     foreach ($target in @('monitor', 'headset')) {
         & $Control "--$target" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Mode command failed.' }
         $state = Wait-State { param($s)
             $id = if ($target -eq 'monitor') { $s.MonitorEndpointId } else { $s.HeadsetEndpointId }
-            $s.Mode -eq $target -and $id -and $s.DefaultIds.Count -eq 3 -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0
+            $microphone = if ($target -eq 'monitor') { $s.FallbackMicrophoneId } else { $s.HeadsetMicrophoneId }
+            $s.Mode -eq $target -and $id -and $microphone -and -not $s.Error -and -not $s.MicrophoneError -and
+                $s.DefaultIds.Count -eq 3 -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0 -and
+                $s.CaptureDefaultIds.Count -eq 3 -and @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0
         }
         $actual = & $Control --diagnose | ConvertFrom-Json
-        if ($LASTEXITCODE -ne 0 -or (Compare-Object $actual.Defaults $state.DefaultIds)) { throw 'Independent default-device readback failed.' }
-        Write-Output "PASS manual ${target}: all three Windows defaults independently verified"
+        if ($LASTEXITCODE -ne 0 -or (Compare-Object $actual.Defaults $state.DefaultIds) -or
+            (Compare-Object $actual.CaptureDefaults $state.CaptureDefaultIds)) { throw 'Independent playback/microphone readback failed.' }
+        Write-Output "PASS manual ${target}: all three Windows playback AND microphone defaults independently verified"
     }
     & $Control --auto | Out-Null
-    for ($index = 0; $index -lt 8; $index++) {
+    for ($index = 0; $index -lt $ReconnectCount; $index++) {
         $beforeRefresh = (Get-LiveStatus).WorkerIterations
         & $Control --refresh | Out-Null
-        $state = Wait-State { param($s) $s.WorkerIterations -gt $beforeRefresh -and $s.Mode -eq 'Automatic' -and $s.Link -in @('Connected','Disconnected') -and -not $s.Error }
+        $state = Wait-State { param($s) $s.WorkerIterations -gt $beforeRefresh -and $s.Mode -eq 'Automatic' -and $s.Link -in @('Connected','Disconnected') -and -not $s.Error -and -not $s.MicrophoneError }
     }
     if ($state.ProcessId -ne $before.ProcessId) { throw 'Process restarted during test.' }
-    Write-Output 'PASS eight HID reconnects; process remained live with verified link responses'
+    Write-Output "PASS $ReconnectCount HID reconnects; process remained live with verified link responses"
     $state = Wait-State { param($s)
         $id = if ($s.Link -eq 'Connected') { $s.HeadsetEndpointId } else { $s.MonitorEndpointId }
-        $s.Mode -eq 'Automatic' -and $id -and @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0
+        $microphone = if ($s.Link -eq 'Connected') { $s.HeadsetMicrophoneId } else { $s.FallbackMicrophoneId }
+        $s.Mode -eq 'Automatic' -and $id -and $microphone -and $s.CaptureDefaultIds.Count -eq 3 -and
+            @($s.DefaultIds | Where-Object { $_ -ne $id }).Count -eq 0 -and
+            @($s.CaptureDefaultIds | Where-Object { $_ -ne $microphone }).Count -eq 0
     }
+    $actual = & $Control --diagnose | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or (Compare-Object $actual.Defaults $state.DefaultIds) -or
+        (Compare-Object $actual.CaptureDefaults $state.CaptureDefaultIds)) { throw 'Automatic routing readback failed.' }
     Write-Output "PASS automatic mode restored: $($state.Link)"
 }
 finally { & $Control --auto | Out-Null }

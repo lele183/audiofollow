@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using BarracudaSwitch;
+using AudioFollow;
 
 class SwitchTests
 {
@@ -99,9 +99,39 @@ class SwitchTests
         settings.MonitorEndpointId = "old";
         Check(settings.Resolve(snapshot, "monitor") == null, "unavailable pinned endpoint does not silently select another device");
     }
+    static void MicrophoneTests()
+    {
+        var settings = new Settings();
+        var snapshot = new AudioSnapshot();
+        snapshot.Endpoints.Add(new Endpoint { Id = "output-with-same-name", Name = Settings.HeadsetMicrophoneName, Flow = 0, State = 1 });
+        snapshot.Endpoints.Add(new Endpoint { Id = "headset-mic", Name = Settings.HeadsetMicrophoneName, Flow = 1, State = 1 });
+        snapshot.Endpoints.Add(new Endpoint { Id = "unplugged", Name = Settings.FallbackMicrophoneName, Flow = 1, State = 8 });
+        Check(settings.ResolveMicrophone(snapshot, true).Id == "headset-mic", "microphone matching cannot select a playback endpoint with the same name");
+        Check(settings.ResolveMicrophone(snapshot, false) == null, "unavailable fallback microphone is never selected");
+        snapshot.Endpoints.Add(new Endpoint { Id = "desktop-mic", Name = Settings.FallbackMicrophoneName, Flow = 1, State = 1 });
+        Check(settings.ResolveMicrophone(snapshot, false).Id == "desktop-mic", "unique active desktop microphone resolves despite an unplugged duplicate");
+        snapshot.Endpoints.Add(new Endpoint { Id = "second-mic", Name = Settings.HeadsetMicrophoneName, Flow = 1, State = 1 });
+        Check(settings.ResolveMicrophone(snapshot, true) == null, "duplicate active microphones require an explicit choice");
+        settings.HeadsetMicrophoneId = "headset-mic";
+        Check(settings.ResolveMicrophone(snapshot, true).Id == "headset-mic", "pinned microphone resolves duplicate names");
+        settings.HeadsetMicrophoneId = "missing";
+        Check(settings.ResolveMicrophone(snapshot, true) == null, "missing pinned microphone never falls back to another microphone");
+        settings.HeadsetMicrophoneId = "output-with-same-name";
+        Check(settings.ResolveMicrophone(snapshot, true) == null, "pinned playback ID cannot be selected as a microphone");
+        settings.HeadsetEndpointId = "headset-mic";
+        Check(settings.Resolve(snapshot, "headset") == null, "pinned microphone ID cannot be selected for playback");
+        Settings legacy = Json.Decode<Settings>("{\"HeadsetEndpointId\":\"saved-output\",\"MonitorEndpointId\":\"saved-monitor\",\"ReferenceEndpointId\":\"saved-reference\"}");
+        Check(legacy.SwitchMicrophone && legacy.HeadsetEndpointId == "saved-output" &&
+            legacy.MonitorEndpointId == "saved-monitor" && legacy.ReferenceEndpointId == "saved-reference" &&
+            legacy.HeadsetMicrophoneId == "" && legacy.FallbackMicrophoneId == "", "legacy settings preserve outputs and enable default microphone following");
+        settings.SwitchMicrophone = false; settings.HeadsetMicrophoneId = "headset-mic"; settings.FallbackMicrophoneId = "desktop-mic";
+        Settings restored = Json.Decode<Settings>(Json.Encode(settings));
+        Check(!restored.SwitchMicrophone && restored.HeadsetMicrophoneId == "headset-mic" &&
+            restored.FallbackMicrophoneId == "desktop-mic", "microphone preferences and disabled-follow setting survive serialization");
+    }
     static int Main()
     {
-        try { ProtocolTests(); RoutingTests(); Console.WriteLine("All " + passed + " checks passed."); return 0; }
+        try { ProtocolTests(); RoutingTests(); MicrophoneTests(); Console.WriteLine("All " + passed + " checks passed."); return 0; }
         catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
     }
 }

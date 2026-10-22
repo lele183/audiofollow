@@ -6,12 +6,12 @@ using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     public sealed class Ipc : IDisposable
     {
         static readonly string Identity = WindowsIdentity.GetCurrent().User.Value;
-        public static readonly string Name = "BarracudaSwitch." + Identity;
+        public static readonly string Name = "AudioFollow." + Identity;
         public static readonly string MutexName = @"Local\" + Name;
         readonly Func<string, string> handler;
         readonly Thread thread;

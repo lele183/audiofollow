@@ -5,28 +5,35 @@ using System.Text;
 using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     public sealed class Settings
     {
         public const string HeadsetName = "扬声器 (7.1 Surround Sound)";
         public const string MonitorName = "XV271U M3 (NVIDIA High Definition Audio)";
         public const string ReferenceName = "扬声器 (Razer Barracuda X 2.4)";
+        public const string HeadsetMicrophoneName = "麦克风 (Razer Barracuda X 2.4)";
+        public const string FallbackMicrophoneName = "麦克风 (Realtek(R) Audio)";
         public string HeadsetEndpointId = "";
         public string MonitorEndpointId = "";
         public string ReferenceEndpointId = "";
+        public bool SwitchMicrophone = true;
+        public string HeadsetMicrophoneId = "";
+        public string FallbackMicrophoneId = "";
 
         public static Settings Load()
         {
-            if (!File.Exists(AppFiles.SettingsFile)) return new Settings();
+            string source = File.Exists(AppFiles.SettingsFile) ? AppFiles.SettingsFile : AppFiles.LegacySettingsFile;
+            if (!File.Exists(source)) return new Settings();
             try
             {
-                Settings value = Json.Decode<Settings>(File.ReadAllText(AppFiles.SettingsFile, Encoding.UTF8));
+                Settings value = Json.Decode<Settings>(File.ReadAllText(source, Encoding.UTF8));
                 if (value == null) throw new InvalidDataException("Settings must be a JSON object.");
                 return value;
             }
             catch (Exception ex)
             {
+                if (source == AppFiles.LegacySettingsFile) return new Settings();
                 string backup = AppFiles.SettingsFile + ".corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
                 try
                 {
@@ -44,8 +51,19 @@ namespace BarracudaSwitch
         {
             string id = kind == "headset" ? HeadsetEndpointId : kind == "monitor" ? MonitorEndpointId : ReferenceEndpointId;
             string name = kind == "headset" ? HeadsetName : kind == "monitor" ? MonitorName : ReferenceName;
-            if (!string.IsNullOrEmpty(id)) return snapshot.Endpoints.FirstOrDefault(e => e.Id == id && e.Active);
-            Endpoint[] matches = snapshot.Endpoints.Where(e => e.Active && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            return ResolveDevice(snapshot, id, name, 0);
+        }
+
+        public Endpoint ResolveMicrophone(AudioSnapshot snapshot, bool headset)
+        {
+            return ResolveDevice(snapshot, headset ? HeadsetMicrophoneId : FallbackMicrophoneId,
+                headset ? HeadsetMicrophoneName : FallbackMicrophoneName, 1);
+        }
+
+        static Endpoint ResolveDevice(AudioSnapshot snapshot, string id, string name, int flow)
+        {
+            if (!string.IsNullOrEmpty(id)) return snapshot.Endpoints.FirstOrDefault(e => e.Id == id && e.Active && e.Flow == flow);
+            Endpoint[] matches = snapshot.Endpoints.Where(e => e.Active && e.Flow == flow && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToArray();
             return matches.Length == 1 ? matches[0] : null;
         }
     }
@@ -58,7 +76,8 @@ namespace BarracudaSwitch
 
     public static class AppFiles
     {
-        public static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BarracudaSwitch");
+        public static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AudioFollow");
+        public static readonly string LegacySettingsFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BarracudaSwitch", "settings.json");
         public static readonly string SettingsFile = Path.Combine(Folder, "settings.json");
         public static readonly string StatusFile = Path.Combine(Folder, "status.json");
         public static readonly string LogFile = Path.Combine(Folder, "switcher.log");
@@ -91,8 +110,8 @@ namespace BarracudaSwitch
     public static class Startup
     {
         const string Key = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        const string Value = "BarracudaSwitch";
-        public static string Command { get { return "\"" + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BarracudaSwitch.exe") + "\" --background"; } }
+        const string Value = "AudioFollow";
+        public static string Command { get { return "\"" + Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AudioFollow.exe") + "\" --background"; } }
         public static bool Enabled
         {
             get

@@ -19,6 +19,6 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: BarracudaSwitch-win-x64
+          name: AudioFollow-win-x64
           path: release/*
           if-no-files-found: error

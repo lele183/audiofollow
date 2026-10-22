@@ -5,7 +5,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     public sealed class HotkeyWindow : NativeWindow, IDisposable
     {
@@ -16,7 +16,7 @@ namespace BarracudaSwitch
         {
             this.engine = engine;
             this.show = show;
-            CreateHandle(new CreateParams { Caption = "BarracudaSwitch events" });
+            CreateHandle(new CreateParams { Caption = "AudioFollow events" });
             ToggleRegistered = RegisterHotKey(Handle, 1, 0x4003, 0x79);
             AutoRegistered = RegisterHotKey(Handle, 2, 0x4003, 0x7a);
             engine.SetHotkeys(ToggleRegistered, AutoRegistered);
@@ -64,20 +64,20 @@ namespace BarracudaSwitch
             var menu = new ContextMenuStrip();
             menu.Items.Add("打开设置", null, delegate { ShowSettings(); });
             menu.Items.Add(new ToolStripSeparator());
-            auto = new ToolStripMenuItem("自动：耳机开机 → 7.1；关机 → 显示器", null, delegate { engine.SetMode(SwitchMode.Automatic); });
+            auto = new ToolStripMenuItem("自动跟随耳机连接", null, delegate { engine.SetMode(SwitchMode.Automatic); });
             headset = new ToolStripMenuItem("手动使用耳机", null, delegate { engine.SetMode(SwitchMode.Headset); });
-            monitor = new ToolStripMenuItem("手动使用显示器", null, delegate { engine.SetMode(SwitchMode.Monitor); });
+            monitor = new ToolStripMenuItem("手动使用桌面设备", null, delegate { engine.SetMode(SwitchMode.Monitor); });
             pause = new ToolStripMenuItem("暂停切换", null, delegate { engine.SetMode(SwitchMode.Paused); });
             menu.Items.AddRange(new ToolStripItem[] { auto, headset, monitor, pause, new ToolStripSeparator() });
             menu.Items.Add("重新检测设备", null, delegate { engine.Reconnect(); });
             menu.Items.Add("退出", null, delegate { ExitThread(); });
-            tray = new NotifyIcon { Icon = iconGood, Text = "耳机自动切换", ContextMenuStrip = menu, Visible = true };
+            tray = new NotifyIcon { Icon = iconGood, Text = "声随 AudioFollow", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += delegate { ShowSettings(); };
             hotkeys = new HotkeyWindow(engine, ShowSettings);
             ipc = new Ipc(HandleCommand);
             engine.StatusChanged += ScheduleUpdate;
             UpdateStatus();
-            AppFiles.Log("START version=1.1.0; toggleHotkey=" + hotkeys.ToggleRegistered + "; autoHotkey=" + hotkeys.AutoRegistered);
+            AppFiles.Log("START version=1.2.0; toggleHotkey=" + hotkeys.ToggleRegistered + "; autoHotkey=" + hotkeys.AutoRegistered);
             if (!background) ShowSettings();
         }
 
@@ -93,10 +93,10 @@ namespace BarracudaSwitch
                 System.Threading.Interlocked.Exchange(ref updatePending, 0);
                 if (exiting) return;
                 SwitchStatus status = engine.Status;
-                string text = "耳机自动切换 · " + LinkText(status.Link);
+                string text = "声随 · " + LinkText(status.Link);
                 text = text.Length > 63 ? text.Substring(0, 63) : text;
                 if (tray.Text != text) tray.Text = text;
-                Icon icon = status.Error == null && (status.Link == "Connected" || status.Link == "Disconnected") ? iconGood : iconUnknown;
+                Icon icon = status.Error == null && status.MicrophoneError == null && (status.Link == "Connected" || status.Link == "Disconnected") ? iconGood : iconUnknown;
                 if (tray.Icon != icon) tray.Icon = icon;
                 auto.Checked = status.Mode == "Automatic"; headset.Checked = status.Mode == "Headset";
                 monitor.Checked = status.Mode == "Monitor"; pause.Checked = status.Mode == "Paused";

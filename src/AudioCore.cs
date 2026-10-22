@@ -3,11 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace BarracudaSwitch
+namespace AudioFollow
 {
     public sealed class Endpoint
     {
         public string Id, Name, Diagnostic;
+        public int Flow;
         public uint State;
         public bool Active { get { return State == 1; } }
         public override string ToString() { return Name + (Active ? "" : " [不可用]"); }
@@ -28,13 +29,16 @@ namespace BarracudaSwitch
     {
         IMMDeviceEnumerator enumerator;
         Notification notification;
+        readonly int flow;
 
-        public AudioCore(Action changed)
+        public AudioCore(Action changed, int flow = 0)
         {
+            if (flow != 0 && flow != 1) throw new ArgumentOutOfRangeException("flow");
+            this.flow = flow;
             enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
             if (changed != null)
             {
-                notification = new Notification(changed);
+                notification = new Notification(changed, flow);
                 Check(enumerator.RegisterEndpointNotificationCallback(notification));
             }
         }
@@ -45,8 +49,8 @@ namespace BarracudaSwitch
             IMMDeviceCollection devices = null;
             try
             {
-                // Exclude phantom devices left by removed drivers; retain disabled/unplugged outputs.
-                Check(enumerator.EnumAudioEndpoints(0, 1 | 2 | 8, out devices));
+                // Exclude phantom devices left by removed drivers; retain disabled/unplugged devices.
+                Check(enumerator.EnumAudioEndpoints(flow, 1 | 2 | 8, out devices));
                 uint count;
                 Check(devices.GetCount(out count));
                 for (uint i = 0; i < count; i++)
@@ -75,7 +79,7 @@ namespace BarracudaSwitch
                             // Removed virtual devices can remain in MMDevice but reject property access.
                             diagnostic = "Friendly name unavailable: " + ex.ErrorCode.ToString("X8");
                         }
-                        result.Endpoints.Add(new Endpoint { Id = id, Name = name, State = state, Diagnostic = diagnostic });
+                        result.Endpoints.Add(new Endpoint { Id = id, Name = name, State = state, Diagnostic = diagnostic, Flow = flow });
                     }
                     finally { Release(properties); Release(device); }
                 }
@@ -90,7 +94,7 @@ namespace BarracudaSwitch
             IMMDevice device = null;
             try
             {
-                int hr = enumerator.GetDefaultAudioEndpoint(0, role, out device);
+                int hr = enumerator.GetDefaultAudioEndpoint(flow, role, out device);
                 if (hr == unchecked((int)0x80070490)) return null;
                 Check(hr);
                 string id;
@@ -104,7 +108,7 @@ namespace BarracudaSwitch
         {
             AudioSnapshot before = Read();
             if (!before.Endpoints.Any(e => e.Id == id && e.Active))
-                throw new InvalidOperationException("Selected output is not active.");
+                throw new InvalidOperationException("Selected audio device is not active.");
             IPolicyConfig policy = null;
             var changed = new List<int>();
             try
@@ -117,7 +121,7 @@ namespace BarracudaSwitch
                     changed.Add(role);
                 }
                 for (int role = 0; role < 3; role++)
-                    if (DefaultId(role) != id) throw new InvalidOperationException("Default output verification failed for role " + role);
+                    if (DefaultId(role) != id) throw new InvalidOperationException("Default audio device verification failed for role " + role);
             }
             catch (Exception original)
             {
@@ -162,12 +166,13 @@ namespace BarracudaSwitch
         sealed class Notification : IMMNotificationClient
         {
             readonly Action changed;
-            public Notification(Action changed) { this.changed = changed; }
+            readonly int flow;
+            public Notification(Action changed, int flow) { this.changed = changed; this.flow = flow; }
             void Signal() { try { changed(); } catch (ObjectDisposedException) { } }
             public int OnDeviceStateChanged(string id, uint state) { Signal(); return 0; }
             public int OnDeviceAdded(string id) { Signal(); return 0; }
             public int OnDeviceRemoved(string id) { Signal(); return 0; }
-            public int OnDefaultDeviceChanged(int flow, int role, string id) { if (flow == 0) Signal(); return 0; }
+            public int OnDefaultDeviceChanged(int flow, int role, string id) { if (flow == this.flow) Signal(); return 0; }
             public int OnPropertyValueChanged(string id, PropertyKey key) { Signal(); return 0; }
         }
     }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — 2026-10-22
+
+- Rename the application to 声随 · AudioFollow, with a new executable, data directory, startup entry, and IPC identity.
+- Follow the headset route for all three microphone roles, with separate headset and desktop input selections.
+- Preserve current input when its configured microphone is missing or ambiguous; keep playback switching independent from input failures.
+- Add an option to disable microphone following, independent input/output cards, keyboard focus, named selectors, and scrollable device configuration.
+- Adapt foundational control and accessibility ideas from Appica UI without adding a web framework or runtime dependency.
+- Migrate legacy device settings without overwriting new preferences; gracefully stop the old app and replace its known login entry.
+- Add ten microphone/legacy-settings regression checks and expand UI validation to nine layouts and microphone controls.
+
 ## 1.1.0 — 2026-10-22
 
 - Keep an overlapped HID read armed and reuse its event and unmanaged buffers.

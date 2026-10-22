@@ -1,2 +1,2 @@
 @echo off
-start "" "%~dp0BarracudaSwitch.exe" --background
+start "" "%~dp0AudioFollow.exe" --background
