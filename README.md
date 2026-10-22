@@ -8,7 +8,7 @@
 
 ## 下载与安装
 
-从 [最新 Release](https://github.com/nomytickethelp/barracuda-switch/releases/latest) 下载 `BarracudaSwitch-v1.1.0-win-x64.zip`，解压到任意目录。仓库为私有时，需要登录获授权的 GitHub 账号。
+从 [最新 Release](https://github.com/lele183/barracuda-switch/releases/latest) 下载 `BarracudaSwitch-v1.1.0-win-x64.zip`，解压到任意目录。仓库为私有时，需要登录获授权的 GitHub 账号。
 
 在解压目录打开 PowerShell，运行：
 
