@@ -8,7 +8,7 @@
 
 ## 下载与安装
 
-从 [v1.3 预览版](https://github.com/lele183/audiofollow/releases/tag/v1.3.0-preview.1) 下载 `AudioFollow-v1.3.0-preview.1-win-x64.zip` 并解压。需要稳定版时使用 [v1.2.0](https://github.com/lele183/audiofollow/releases/tag/v1.2.0)。私有仓库需要登录获授权的账号。
+从 [v1.3 预览版](https://github.com/lele183/audiofollow/releases/tag/v1.3.0-preview.1) 下载 `AudioFollow-v1.3.0-preview.1-win-x64.zip` 并解压。需要稳定版时使用 [v1.2.0](https://github.com/lele183/audiofollow/releases/tag/v1.2.0)。仓库已公开，Release 资产可直接下载，无需登录 GitHub 账号。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -StartNow
